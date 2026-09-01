@@ -17,6 +17,9 @@ import com.example.data.database.ExpenseEntity
 import com.example.data.database.NoteEntity
 import com.example.data.database.StudySessionEntity
 import com.example.data.database.TaskEntity
+import com.example.data.database.GoalEntity
+import com.example.data.database.MilestoneEntity
+import com.example.data.database.JournalEntity
 import com.example.data.repository.LifeRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -26,6 +29,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.firstOrNull
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -39,6 +43,24 @@ class LifeViewModel(
     private val repository: LifeRepository
 ) : AndroidViewModel(application) {
 
+    // --- Preferences & Last Export Check ---
+    private val prefs by lazy {
+        application.getSharedPreferences("life_os_prefs", android.content.Context.MODE_PRIVATE)
+    }
+
+    private val _lastExportTime = MutableStateFlow(0L)
+    val lastExportTime: StateFlow<Long> = _lastExportTime.asStateFlow()
+
+    init {
+        _lastExportTime.value = prefs.getLong("last_export_time", 0L)
+    }
+
+    fun recordExportTime() {
+        val now = System.currentTimeMillis()
+        prefs.edit().putLong("last_export_time", now).apply()
+        _lastExportTime.value = now
+    }
+
     // --- Core UI Navigation & Theme State ---
     private val _currentScreen = MutableStateFlow("home") // "home", "tasks", "study", "notes", "finance", "settings"
     val currentScreen: StateFlow<String> = _currentScreen.asStateFlow()
@@ -51,6 +73,15 @@ class LifeViewModel(
 
     private val _isOnline = MutableStateFlow(true)
     val isOnline: StateFlow<Boolean> = _isOnline.asStateFlow()
+
+    private val _aiTaskOrder = MutableStateFlow<List<Long>>(emptyList())
+    val aiTaskOrder: StateFlow<List<Long>> = _aiTaskOrder.asStateFlow()
+
+    private val _aiOrderRationale = MutableStateFlow<String?>(null)
+    val aiOrderRationale: StateFlow<String?> = _aiOrderRationale.asStateFlow()
+
+    private val _isPrioritizing = MutableStateFlow(false)
+    val isPrioritizing: StateFlow<Boolean> = _isPrioritizing.asStateFlow()
 
     private val _newlyCompletedSession = MutableStateFlow<StudySessionEntity?>(null)
     val newlyCompletedSession: StateFlow<StudySessionEntity?> = _newlyCompletedSession.asStateFlow()
@@ -278,7 +309,7 @@ class LifeViewModel(
 
     // --- Action Operations (P0) ---
     // Tasks
-    fun addTask(title: String, description: String, priority: String, dueDate: Long?, dueTime: String?, category: String) {
+    fun addTask(title: String, description: String, priority: String, dueDate: Long? = null, dueTime: String? = null, category: String, aiSuggestedPriority: String? = null) {
         viewModelScope.launch {
             repository.insertTask(
                 TaskEntity(
@@ -287,7 +318,8 @@ class LifeViewModel(
                     priority = priority,
                     dueDate = dueDate ?: System.currentTimeMillis(),
                     dueTime = dueTime ?: "12:00",
-                    category = category
+                    category = category,
+                    aiSuggestedPriority = aiSuggestedPriority
                 )
             )
         }
@@ -295,7 +327,124 @@ class LifeViewModel(
 
     fun toggleTaskCompletion(task: TaskEntity) {
         viewModelScope.launch {
-            repository.updateTask(task.copy(isCompleted = !task.isCompleted))
+            val nextCompleted = !task.isCompleted
+            val completedTime = if (nextCompleted) System.currentTimeMillis() else null
+            repository.updateTask(task.copy(
+                isCompleted = nextCompleted,
+                completedAt = completedTime
+            ))
+            // Auto refresh prioritized path when a task is checked off
+            recalculateAiPrioritizedPath()
+        }
+    }
+
+    fun suggestPriorityForTask(title: String, description: String, onResult: (String, String) -> Unit) {
+        viewModelScope.launch {
+            val textToAnalyze = "$title $description".lowercase()
+            if (!_isOnline.value) {
+                // Offline fallback logic
+                val suggested = when {
+                    textToAnalyze.contains("exam") || textToAnalyze.contains("urgent") || textToAnalyze.contains("critical") || textToAnalyze.contains("deadline") || textToAnalyze.contains("asap") -> "HIGH"
+                    textToAnalyze.contains("review") || textToAnalyze.contains("study") || textToAnalyze.contains("homework") || textToAnalyze.contains("buy") || textToAnalyze.contains("groceries") -> "MEDIUM"
+                    else -> "LOW"
+                }
+                onResult(suggested, "Offline Suggestion: Based on keywords match of \"$title\".")
+                return@launch
+            }
+            try {
+                val prompt = """
+                    Analyze this task title and description, and suggest a priority level (LOW, MEDIUM, or HIGH) with a concise, one-sentence explanation.
+                    Title: "$title"
+                    Description: "$description"
+                    
+                    You MUST respond in this exact JSON format:
+                    {
+                      "priority": "HIGH" | "MEDIUM" | "LOW",
+                      "reason": "your short explanation why this priority level fits the task"
+                    }
+                """.trimIndent()
+                val response = GeminiClient.generate(
+                    prompt = prompt,
+                    systemInstruction = "You are an intelligent task prioritization agent. Only output valid JSON matching the schema.",
+                    isJson = true
+                )
+                val suggested = when {
+                    response.contains("\"HIGH\"", ignoreCase = true) -> "HIGH"
+                    response.contains("\"MEDIUM\"", ignoreCase = true) -> "MEDIUM"
+                    else -> "LOW"
+                }
+                val explanation = "\"reason\"\\s*:\\s*\"([^\"]*)\"".toRegex().find(response)?.groupValues?.get(1)
+                    ?: "Suggested priority based on task impact and scope."
+                onResult(suggested, explanation)
+            } catch (e: Exception) {
+                onResult("MEDIUM", "Unable to suggest priority online: ${e.localizedMessage}")
+            }
+        }
+    }
+
+    fun recalculateAiPrioritizedPath() {
+        viewModelScope.launch {
+            val pending = repository.allTasks.firstOrNull()?.filter { !it.isCompleted } ?: emptyList()
+            if (pending.isEmpty()) {
+                _aiTaskOrder.value = emptyList()
+                _aiOrderRationale.value = null
+                return@launch
+            }
+            _isPrioritizing.value = true
+            if (!_isOnline.value) {
+                val sorted = pending.sortedWith(compareBy<TaskEntity> {
+                    when (it.priority) {
+                        "HIGH" -> 0
+                        "MEDIUM" -> 1
+                        else -> 2
+                    }
+                }.thenBy { it.dueDate ?: Long.MAX_VALUE })
+                _aiTaskOrder.value = sorted.map { it.id }
+                _aiOrderRationale.value = "Offline Priority Path: Sorted sequentially by standard user priority (HIGH to LOW) and upcoming due dates. Connect online for a customized AI-prioritized plan."
+                _isPrioritizing.value = false
+                return@launch
+            }
+            try {
+                val taskDetails = pending.joinToString("\n") { task ->
+                    "ID: ${task.id}, Title: ${task.title}, Description: ${task.description}, Priority: ${task.priority}, Due Date: ${task.dueDate?.let { SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date(it)) } ?: "None"}"
+                }
+                val prompt = """
+                    You are an elite productivity executive. Optimize the order of execution for these pending tasks to maximize efficiency and minimize stress.
+                    Tasks:
+                    $taskDetails
+                    
+                    You MUST return your suggested optimal order of IDs and a concise friendly reasoning (max 2-3 sentences) in this exact JSON format:
+                    {
+                      "taskIds": [list of task IDs in recommended sequence, e.g. [1, 3, 2]],
+                      "rationale": "your clear and helpful explanation of why this sequence is optimal"
+                    }
+                """.trimIndent()
+                val response = GeminiClient.generate(
+                    prompt = prompt,
+                    systemInstruction = "You are a precise task optimization assistant. Always output valid JSON.",
+                    isJson = true
+                )
+                val idList = "\"taskIds\"\\s*:\\s*\\[([^\\]]*)\\]".toRegex().find(response)?.groupValues?.get(1)
+                    ?.split(",")
+                    ?.mapNotNull { it.trim().toLongOrNull() } ?: emptyList()
+                val explanation = "\"rationale\"\\s*:\\s*\"([^\"]*)\"".toRegex().find(response)?.groupValues?.get(1)
+                    ?: "Suggested sequence designed to balance quick wins with critical targets."
+                
+                _aiTaskOrder.value = idList
+                _aiOrderRationale.value = explanation
+            } catch (e: Exception) {
+                val sorted = pending.sortedWith(compareBy<TaskEntity> {
+                    when (it.priority) {
+                        "HIGH" -> 0
+                        "MEDIUM" -> 1
+                        else -> 2
+                    }
+                }.thenBy { it.dueDate ?: Long.MAX_VALUE })
+                _aiTaskOrder.value = sorted.map { it.id }
+                _aiOrderRationale.value = "Sorted sequentially: ${e.localizedMessage}"
+            } finally {
+                _isPrioritizing.value = false
+            }
         }
     }
 
@@ -312,17 +461,75 @@ class LifeViewModel(
     }
 
     // Notes
-    fun addNote(title: String, content: String, category: String, tagsString: String) {
+    fun addNote(title: String, content: String, category: String, tagsString: String, folder: String = "General") {
         viewModelScope.launch {
             repository.insertNote(
                 NoteEntity(
                     title = title,
                     content = content,
                     category = category,
-                    tags = tagsString
+                    tags = tagsString,
+                    folder = folder
                 )
             )
         }
+    }
+
+    fun exportAllDataAsJson(onResult: (String) -> Unit) {
+        viewModelScope.launch {
+            val tasksList = repository.allTasks.firstOrNull() ?: emptyList()
+            val notesList = repository.allNotes.firstOrNull() ?: emptyList()
+            
+            val json = buildString {
+                append("{\n")
+                append("  \"exportedAt\": ${System.currentTimeMillis()},\n")
+                
+                // Serialize Tasks
+                append("  \"tasks\": [\n")
+                tasksList.forEachIndexed { i, task ->
+                    append("    {\n")
+                    append("      \"id\": ${task.id},\n")
+                    append("      \"title\": \"${escapeJson(task.title)}\",\n")
+                    append("      \"description\": \"${escapeJson(task.description)}\",\n")
+                    append("      \"priority\": \"${task.priority}\",\n")
+                    append("      \"dueDate\": ${task.dueDate},\n")
+                    append("      \"dueTime\": \"${task.dueTime ?: ""}\",\n")
+                    append("      \"category\": \"${task.category}\",\n")
+                    append("      \"isCompleted\": ${task.isCompleted},\n")
+                    append("      \"aiSuggestedPriority\": ${task.aiSuggestedPriority?.let { "\"$it\"" } ?: "null"}\n")
+                    append("    }${if (i < tasksList.lastIndex) "," else ""}\n")
+                }
+                append("  ],\n")
+                
+                // Serialize Notes
+                append("  \"notes\": [\n")
+                notesList.forEachIndexed { i, note ->
+                    append("    {\n")
+                    append("      \"id\": ${note.id},\n")
+                    append("      \"title\": \"${escapeJson(note.title)}\",\n")
+                    append("      \"content\": \"${escapeJson(note.content)}\",\n")
+                    append("      \"category\": \"${escapeJson(note.category)}\",\n")
+                    append("      \"folder\": \"${escapeJson(note.folder)}\",\n")
+                    append("      \"tags\": \"${escapeJson(note.tags)}\",\n")
+                    append("      \"isPinned\": ${note.isPinned},\n")
+                    append("      \"isArchived\": ${note.isArchived},\n")
+                    append("      \"createdAt\": ${note.createdAt}\n")
+                    append("    }${if (i < notesList.lastIndex) "," else ""}\n")
+                }
+                append("  ]\n")
+                append("}")
+            }
+            recordExportTime()
+            onResult(json)
+        }
+    }
+
+    private fun escapeJson(str: String): String {
+        return str.replace("\\", "\\\\")
+                  .replace("\"", "\\\"")
+                  .replace("\n", "\\n")
+                  .replace("\r", "\\r")
+                  .replace("\t", "\\t")
     }
 
     fun editNote(note: NoteEntity) {
@@ -639,7 +846,26 @@ class LifeViewModel(
             repository.insertTask(TaskEntity(title = "Study Physics Chapter 4", description = "Review mechanics and force equations", priority = "HIGH", dueDate = today, dueTime = "14:00", category = "Study"))
             repository.insertTask(TaskEntity(title = "Solve Math Assignment 3", description = "Calculus limits and derivatives", priority = "MEDIUM", dueDate = tomorrow, dueTime = "10:30", category = "Study"))
             repository.insertTask(TaskEntity(title = "Weekly Groceries Shopping", description = "Apples, Milk, Bread, Chicken breast", priority = "LOW", dueDate = tomorrow, dueTime = "18:00", category = "Personal"))
-            repository.insertTask(TaskEntity(title = "Code Review: LifeOS App", description = "Examine architecture layers and database schemas", priority = "HIGH", dueDate = today, dueTime = "16:45", category = "Work", isCompleted = true))
+            repository.insertTask(TaskEntity(title = "Code Review: LifeOS App", description = "Examine architecture layers and database schemas", priority = "HIGH", dueDate = today, dueTime = "16:45", category = "Work", isCompleted = true, completedAt = today - 2 * 3600000L))
+
+            // Insert sample completed tasks for the weekly productivity heatmap!
+            val dayMillis = 86400000L
+            val hourMillis = 3600000L
+            
+            // 1 day ago - Afternoon
+            repository.insertTask(TaskEntity(title = "Math Quiz 2", description = "Algebra prep", priority = "MEDIUM", isCompleted = true, completedAt = today - 1 * dayMillis - 3 * hourMillis, category = "Study"))
+            // 2 days ago - Morning
+            repository.insertTask(TaskEntity(title = "Cardio Run 5K", description = "Gym day", priority = "LOW", isCompleted = true, completedAt = today - 2 * dayMillis - 14 * hourMillis, category = "Personal"))
+            // 3 days ago - Evening
+            repository.insertTask(TaskEntity(title = "Clean Bedroom", description = "Declutter desk", priority = "LOW", isCompleted = true, completedAt = today - 3 * dayMillis - 5 * hourMillis, category = "Personal"))
+            // 4 days ago - Morning
+            repository.insertTask(TaskEntity(title = "Review Chemistry Lab", description = "Write report", priority = "HIGH", isCompleted = true, completedAt = today - 4 * dayMillis - 15 * hourMillis, category = "Study"))
+            // 4 days ago - Afternoon
+            repository.insertTask(TaskEntity(title = "Buy Desk Lamp", description = "From HomeDepot", priority = "LOW", isCompleted = true, completedAt = today - 4 * dayMillis - 8 * hourMillis, category = "Personal"))
+            // 5 days ago - Evening
+            repository.insertTask(TaskEntity(title = "Update Resume", description = "Add project details", priority = "HIGH", isCompleted = true, completedAt = today - 5 * dayMillis - 4 * hourMillis, category = "Work"))
+            // 6 days ago - Night
+            repository.insertTask(TaskEntity(title = "Read SciFi Novel", description = "Chapter 8-10", priority = "LOW", isCompleted = true, completedAt = today - 6 * dayMillis - 1 * hourMillis, category = "Personal"))
 
             // Insert sample notes
             repository.insertNote(NoteEntity(title = "Physics Formulas", content = "F = m * a\nE = m * c^2\np = m * v\nRemember kinetic energy: KE = 0.5 * m * v^2", category = "Study", tags = "physics,formulas,exam", isPinned = true))
@@ -657,6 +883,209 @@ class LifeViewModel(
 
             // Chat intro
             repository.insertMessage(ChatMessageEntity(role = "MODEL", content = "Welcome to **LifeOS**! I have loaded your daily productivity sample data. Ask me to create a task, note, or log expenses! Try saying: *\"Create high priority task to prepare for chemistry exam tomorrow\"*"))
+        }
+    }
+
+    // --- Goals & Milestones (Phase 4) ---
+    val goals: StateFlow<List<GoalEntity>> = repository.allGoals
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    private val _aiSuggestedMilestones = MutableStateFlow<String?>(null)
+    val aiSuggestedMilestones: StateFlow<String?> = _aiSuggestedMilestones.asStateFlow()
+
+    private val _isGeneratingMilestones = MutableStateFlow(false)
+    val isGeneratingMilestones: StateFlow<Boolean> = _isGeneratingMilestones.asStateFlow()
+
+    fun askAiToSuggestMilestones(goalTitle: String, goalDescription: String, goalCategory: String, targetDate: Long) {
+        viewModelScope.launch {
+            _isGeneratingMilestones.value = true
+            _aiSuggestedMilestones.value = null
+            
+            val taskListStr = tasks.value.take(15).joinToString("\n") { 
+                "- ${it.title} (${it.category}, Priority: ${it.priority}, Completed: ${it.isCompleted})"
+            }
+            
+            if (!_isOnline.value) {
+                delay(1000)
+                val targetDateStr = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date(targetDate))
+                _aiSuggestedMilestones.value = """
+                    [
+                      {"title": "Initial research & core setup", "weeks_remaining": 3},
+                      {"title": "Milestone A: Draft & validate outline", "weeks_remaining": 2},
+                      {"title": "Milestone B: Final execution & reviews before $targetDateStr", "weeks_remaining": 1}
+                    ]
+                """.trimIndent()
+                _isGeneratingMilestones.value = false
+                return@launch
+            }
+            
+            try {
+                val prompt = """
+                    Given user's task patterns:
+                    $taskListStr
+                    
+                    Formulate a realistic timeline and 3 critical milestones for this goal:
+                    Goal: "$goalTitle"
+                    Description: "$goalDescription"
+                    Category: "$goalCategory"
+                    Target Date: ${SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date(targetDate))}
+                    
+                    Return EXACTLY a JSON array matching this format (no other text):
+                    [
+                      {
+                        "title": "Actionable Milestone Title",
+                        "weeks_remaining": 4
+                      }
+                    ]
+                """.trimIndent()
+                
+                val response = GeminiClient.generate(
+                    prompt = prompt,
+                    systemInstruction = "You are a realistic timeline generator. Always output valid JSON array.",
+                    isJson = true
+                )
+                _aiSuggestedMilestones.value = response
+            } catch (e: Exception) {
+                _aiSuggestedMilestones.value = "[]"
+            } finally {
+                _isGeneratingMilestones.value = false
+            }
+        }
+    }
+
+    fun clearSuggestedMilestones() {
+        _aiSuggestedMilestones.value = null
+    }
+
+    fun addGoalWithMilestones(title: String, description: String, category: String, targetDate: Long, milestones: List<String>) {
+        viewModelScope.launch {
+            val goalId = repository.insertGoal(
+                GoalEntity(
+                    title = title,
+                    description = description,
+                    category = category,
+                    targetDate = targetDate
+                )
+            )
+            milestones.forEachIndexed { index, mTitle ->
+                val interval = (targetDate - System.currentTimeMillis()) / milestones.size
+                val mTargetDate = System.currentTimeMillis() + (interval * (index + 1))
+                repository.insertMilestone(
+                    MilestoneEntity(
+                        goalId = goalId,
+                        title = mTitle,
+                        targetDate = mTargetDate,
+                        isCompleted = false
+                    )
+                )
+            }
+        }
+    }
+
+    fun deleteGoal(goal: GoalEntity) {
+        viewModelScope.launch {
+            repository.deleteGoal(goal)
+            repository.deleteMilestonesForGoal(goal.id)
+        }
+    }
+
+    fun toggleGoalCompletion(goal: GoalEntity) {
+        viewModelScope.launch {
+            repository.updateGoal(goal.copy(isCompleted = !goal.isCompleted))
+        }
+    }
+
+    fun getMilestonesForGoal(goalId: Long) = repository.getMilestonesForGoal(goalId)
+
+    fun toggleMilestoneCompletion(milestone: MilestoneEntity) {
+        viewModelScope.launch {
+            repository.updateMilestone(milestone.copy(isCompleted = !milestone.isCompleted))
+        }
+    }
+
+    // --- Journal & Reflection Prompts ---
+    val journals: StateFlow<List<JournalEntity>> = repository.allJournals
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    private val _generatedJournalPrompt = MutableStateFlow<String?>(null)
+    val generatedJournalPrompt: StateFlow<String?> = _generatedJournalPrompt.asStateFlow()
+
+    private val _isGeneratingJournalPrompt = MutableStateFlow(false)
+    val isGeneratingJournalPrompt: StateFlow<Boolean> = _isGeneratingJournalPrompt.asStateFlow()
+
+    fun generateDailyReflectionPrompt() {
+        viewModelScope.launch {
+            _isGeneratingJournalPrompt.value = true
+            _generatedJournalPrompt.value = null
+            
+            val todayStart = getStartOfDayMillis()
+            val completedToday = repository.allTasks.firstOrNull()?.filter { 
+                it.isCompleted && (it.completedAt ?: 0L) >= todayStart 
+            } ?: emptyList()
+            
+            val expensesToday = repository.allExpenses.firstOrNull()?.filter { 
+                it.type == "EXPENSE" && it.date >= todayStart 
+            } ?: emptyList()
+            val totalSpentToday = expensesToday.sumOf { it.amount }
+            val highestCategory = expensesToday.maxByOrNull { it.amount }?.category ?: "None"
+            
+            val tasksStr = if (completedToday.isNotEmpty()) {
+                completedToday.joinToString(", ") { "'${it.title}'" }
+            } else {
+                "no major tasks today"
+            }
+            
+            val financialStr = if (totalSpentToday > 0.0) {
+                "spent $${String.format(Locale.getDefault(), "%.2f", totalSpentToday)} with maximum on '$highestCategory'"
+            } else {
+                "no expenses logged today"
+            }
+            
+            if (!_isOnline.value) {
+                delay(1000)
+                _generatedJournalPrompt.value = "How did your achievements ($tasksStr) and spending ($financialStr) today reflect what truly matters to you? Write your reflection below."
+                _isGeneratingJournalPrompt.value = false
+                return@launch
+            }
+            
+            try {
+                val prompt = """
+                    Daily activities:
+                    - Tasks completed: $tasksStr
+                    - Expenses logged: $financialStr
+                    
+                    Generate a single creative reflection prompt (max 2 sentences) that helps the user reflect on their productivity vs financial choices today.
+                """.trimIndent()
+                
+                val response = GeminiClient.generate(
+                    prompt = prompt,
+                    systemInstruction = "You are a reflective journal assistant. Keep prompts inspiring, personal, and concise."
+                )
+                _generatedJournalPrompt.value = response
+            } catch (e: Exception) {
+                _generatedJournalPrompt.value = "Reflecting on today, what achievements brought you closer to your long-term goals, and were there any distractions?"
+            } finally {
+                _isGeneratingJournalPrompt.value = false
+            }
+        }
+    }
+
+    fun saveJournalEntry(prompt: String, reflection: String) {
+        viewModelScope.launch {
+            repository.insertJournal(
+                JournalEntity(
+                    date = getStartOfDayMillis(),
+                    prompt = prompt,
+                    reflection = reflection
+                )
+            )
+            _generatedJournalPrompt.value = null
+        }
+    }
+
+    fun deleteJournal(journal: JournalEntity) {
+        viewModelScope.launch {
+            repository.deleteJournal(journal)
         }
     }
 

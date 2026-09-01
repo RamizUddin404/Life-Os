@@ -59,6 +59,9 @@ import com.example.ui.onboarding.OnboardingScreen
 import com.example.ui.settings.SettingsScreen
 import com.example.ui.study.StudyScreen
 import com.example.ui.tasks.TasksScreen
+import com.example.ui.goals.GoalsScreen
+import com.example.ui.journal.JournalScreen
+import com.example.ui.heatmap.HeatmapScreen
 import com.example.ui.theme.MyApplicationTheme
 import com.example.ui.viewmodel.LifeViewModel
 import com.example.ui.viewmodel.LifeViewModelFactory
@@ -145,6 +148,9 @@ fun MainAppContainer(
                 "finance" -> FinanceScreen(viewModel = viewModel)
                 "settings" -> SettingsScreen(viewModel = viewModel)
                 "assistant" -> AssistantScreen(viewModel = viewModel)
+                "goals" -> GoalsScreen(viewModel = viewModel)
+                "journal" -> JournalScreen(viewModel = viewModel)
+                "heatmap" -> HeatmapScreen(viewModel = viewModel)
             }
         }
     }

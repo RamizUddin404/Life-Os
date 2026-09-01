@@ -103,3 +103,57 @@ interface ChatDao {
     @Query("DELETE FROM chat_messages")
     suspend fun clearChat()
 }
+
+@Dao
+interface GoalDao {
+    @Query("SELECT * FROM goals ORDER BY targetDate ASC")
+    fun getAllGoals(): Flow<List<GoalEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertGoal(goal: GoalEntity): Long
+
+    @Update
+    suspend fun updateGoal(goal: GoalEntity)
+
+    @Delete
+    suspend fun deleteGoal(goal: GoalEntity)
+
+    @Query("DELETE FROM goals WHERE id = :id")
+    suspend fun deleteGoalById(id: Long)
+}
+
+@Dao
+interface MilestoneDao {
+    @Query("SELECT * FROM milestones WHERE goalId = :goalId ORDER BY targetDate ASC")
+    fun getMilestonesForGoal(goalId: Long): Flow<List<MilestoneEntity>>
+
+    @Query("SELECT * FROM milestones WHERE goalId = :goalId ORDER BY targetDate ASC")
+    suspend fun getMilestonesForGoalSync(goalId: Long): List<MilestoneEntity>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertMilestone(milestone: MilestoneEntity): Long
+
+    @Update
+    suspend fun updateMilestone(milestone: MilestoneEntity)
+
+    @Delete
+    suspend fun deleteMilestone(milestone: MilestoneEntity)
+
+    @Query("DELETE FROM milestones WHERE goalId = :goalId")
+    suspend fun deleteMilestonesForGoal(goalId: Long)
+
+    @Query("DELETE FROM milestones WHERE id = :id")
+    suspend fun deleteMilestoneById(id: Long)
+}
+
+@Dao
+interface JournalDao {
+    @Query("SELECT * FROM journals ORDER BY date DESC")
+    fun getAllJournals(): Flow<List<JournalEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertJournal(journal: JournalEntity): Long
+
+    @Delete
+    suspend fun deleteJournal(journal: JournalEntity)
+}

@@ -12,7 +12,10 @@ class LifeApplication : Application() {
             database.noteDao(),
             database.studyDao(),
             database.expenseDao(),
-            database.chatDao()
+            database.chatDao(),
+            database.goalDao(),
+            database.milestoneDao(),
+            database.journalDao()
         )
     }
 

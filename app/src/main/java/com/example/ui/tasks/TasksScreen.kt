@@ -1,6 +1,16 @@
 package com.example.ui.tasks
 
+import android.Manifest
+import android.content.Intent
+import android.os.Bundle
+import android.speech.RecognitionListener
+import android.speech.RecognizerIntent
+import android.speech.SpeechRecognizer
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -21,12 +31,15 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.FilterList
+import androidx.compose.material.icons.filled.Mic
+import androidx.compose.material.icons.filled.MicOff
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.Circle
@@ -45,6 +58,8 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -54,7 +69,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
@@ -86,6 +103,21 @@ fun TasksScreen(
     var priority by remember { mutableStateOf("MEDIUM") }
     var category by remember { mutableStateOf("Personal") }
 
+    // Speech-To-Text states
+    val context = LocalContext.current
+    var speechTargetField by remember { mutableStateOf<String?>(null) } // "title" or "description"
+    var showSpeechDialog by remember { mutableStateOf(false) }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { isGranted ->
+        if (isGranted) {
+            showSpeechDialog = true
+        } else {
+            Toast.makeText(context, "Microphone access is required for dictation.", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     Box(modifier = modifier.fillMaxSize()) {
         Column(
             modifier = Modifier
@@ -107,29 +139,49 @@ fun TasksScreen(
                     color = MaterialTheme.colorScheme.onBackground
                 )
                 
-                // Add Quick task statistics text
-                val completedCount = tasks.count { it.isCompleted }
-                val totalCount = tasks.size
-                Text(
-                    text = "$completedCount/$totalCount done",
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.1f))
-                        .padding(horizontal = 10.dp, vertical = 4.dp)
-                )
+                // Filter dropdown trigger
+                var showFilterMenu by remember { mutableStateOf(false) }
+                Box {
+                    IconButton(
+                        onClick = { showFilterMenu = true },
+                        modifier = Modifier
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f))
+                            .testTag("task_filter_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.FilterList,
+                            contentDescription = "Filter tasks",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+
+                    DropdownMenu(
+                        expanded = showFilterMenu,
+                        onDismissRequest = { showFilterMenu = false }
+                    ) {
+                        listOf("ALL", "PENDING", "COMPLETED").forEach { opt ->
+                            DropdownMenuItem(
+                                text = { Text(opt, fontWeight = FontWeight.Bold) },
+                                onClick = {
+                                    viewModel.taskFilter.value = opt
+                                    showFilterMenu = false
+                                }
+                            )
+                        }
+                    }
+                }
             }
 
-            // Search Bar
+            // Search
             OutlinedTextField(
                 value = taskSearchQuery,
                 onValueChange = { viewModel.taskSearchQuery.value = it },
+                placeholder = { Text("Search task title, details, category...") },
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("task_search_input"),
-                placeholder = { Text("Search tasks...") },
                 leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Search") },
                 trailingIcon = {
                     if (taskSearchQuery.isNotBlank()) {
@@ -146,54 +198,49 @@ fun TasksScreen(
                 )
             )
 
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(16.dp))
 
-            // Filter Tabs Row
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                val filters = listOf("TODAY", "UPCOMING", "COMPLETED", "ALL")
-                filters.forEach { filterOption ->
-                    val isSelected = taskFilter == filterOption
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(
-                                if (isSelected) MaterialTheme.colorScheme.primary 
-                                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                            )
-                            .clickable { viewModel.taskFilter.value = filterOption }
-                            .padding(vertical = 10.dp),
-                        contentAlignment = Alignment.Center
+            // AI suggested priority prompt card (reorganized queue visual highlight)
+            val pendingCount = tasks.count { !it.isCompleted }
+            if (pendingCount > 1) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(bottom = 12.dp),
+                    shape = RoundedCornerShape(16.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
+                    ),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.2f))
+                ) {
+                    Row(
+                        modifier = Modifier.padding(14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Text(
-                            text = filterOption,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(Icons.Default.AutoAwesome, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(18.dp))
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column {
+                                Text("AI Optimized Queue", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                                Text("Priority analyzer has dynamically sorted your schedule", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
                     }
                 }
             }
 
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Tasks List
+            // Task List
             if (tasks.isEmpty()) {
-                val emptyTip = when (taskFilter) {
-                    "TODAY" -> "No tasks due today. Relax or schedule ahead!"
-                    "UPCOMING" -> "No upcoming scheduled tasks."
-                    "COMPLETED" -> "You haven't completed any tasks yet."
-                    else -> "No tasks found. Use the floating '+' button to create one!"
-                }
                 EmptyStateView(
                     icon = Icons.Default.CalendarMonth,
-                    title = "Clean Slate",
-                    tip = emptyTip,
+                    title = "No tasks found",
+                    tip = "Add tasks to manage your days, request AI suggested priority level, or dictate with your voice!",
                     modifier = Modifier.weight(1f),
-                    actionText = "Create Task",
+                    actionText = "Add Task",
                     onActionClick = {
                         title = ""
                         description = ""
@@ -251,6 +298,15 @@ fun TasksScreen(
 
     // Modern Modal Input Dialog
     if (showAddDialog) {
+        var aiSuggestedPriorityState by remember { mutableStateOf<String?>(null) }
+        var aiSuggestionReason by remember { mutableStateOf<String?>(null) }
+        var isSuggestingPriority by remember { mutableStateOf(false) }
+
+        remember(taskToEdit) {
+            aiSuggestedPriorityState = taskToEdit?.aiSuggestedPriority
+            aiSuggestionReason = if (taskToEdit?.aiSuggestedPriority != null) "AI suggested priority level saved previously." else null
+        }
+
         Dialog(onDismissRequest = { showAddDialog = false }) {
             Card(
                 modifier = Modifier
@@ -274,6 +330,7 @@ fun TasksScreen(
                     )
                     Spacer(modifier = Modifier.height(16.dp))
 
+                    // Title with microphone trailing icon
                     OutlinedTextField(
                         value = title,
                         onValueChange = { title = it },
@@ -282,6 +339,14 @@ fun TasksScreen(
                             .fillMaxWidth()
                             .testTag("task_title_input"),
                         singleLine = true,
+                        trailingIcon = {
+                            IconButton(onClick = {
+                                speechTargetField = "title"
+                                permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                            }) {
+                                Icon(Icons.Default.Mic, contentDescription = "Dictate title", tint = MaterialTheme.colorScheme.primary)
+                            }
+                        },
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = MaterialTheme.colorScheme.primary
                         )
@@ -289,6 +354,7 @@ fun TasksScreen(
 
                     Spacer(modifier = Modifier.height(12.dp))
 
+                    // Description with microphone trailing icon
                     OutlinedTextField(
                         value = description,
                         onValueChange = { description = it },
@@ -298,21 +364,69 @@ fun TasksScreen(
                             .testTag("task_desc_input"),
                         minLines = 2,
                         maxLines = 4,
+                        trailingIcon = {
+                            IconButton(onClick = {
+                                speechTargetField = "description"
+                                permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                            }) {
+                                Icon(Icons.Default.Mic, contentDescription = "Dictate description", tint = MaterialTheme.colorScheme.primary)
+                            }
+                        },
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = MaterialTheme.colorScheme.primary
                         )
                     )
 
-                    Spacer(modifier = Modifier.height(16.dp))
+                    Spacer(modifier = Modifier.height(12.dp))
 
-                    // Priority Selector Row
-                    Text(
-                        text = "Priority",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
+                    // AI Suggest Priority Trigger Row
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "Priority",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        
+                        TextButton(
+                            onClick = {
+                                if (title.isNotBlank()) {
+                                    isSuggestingPriority = true
+                                    viewModel.suggestPriorityForTask(title, description) { sug, reason ->
+                                        aiSuggestedPriorityState = sug
+                                        aiSuggestionReason = reason
+                                        isSuggestingPriority = false
+                                    }
+                                }
+                            },
+                            enabled = title.isNotBlank() && !isSuggestingPriority,
+                            modifier = Modifier.testTag("ai_suggest_priority_button")
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                              ) {
+                                Icon(
+                                    imageVector = Icons.Default.AutoAwesome,
+                                    contentDescription = null,
+                                    tint = if (title.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Text(
+                                    text = if (isSuggestingPriority) "Analyzing..." else "AI Suggest Priority",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (title.isNotBlank()) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                )
+                            }
+                        }
+                    }
+
+                    // Priority options toggle
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
@@ -327,15 +441,15 @@ fun TasksScreen(
                             Box(
                                 modifier = Modifier
                                     .weight(1f)
-                                    .clip(RoundedCornerShape(8.dp))
+                                    .clip(RoundedCornerShape(10.dp))
                                     .background(
-                                        if (selected) color.copy(alpha = 0.2f)
+                                        if (selected) color.copy(alpha = 0.15f)
                                         else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
                                     )
                                     .border(
                                         width = 1.dp,
                                         color = if (selected) color else Color.Transparent,
-                                        shape = RoundedCornerShape(8.dp)
+                                        shape = RoundedCornerShape(10.dp)
                                     )
                                     .clickable { priority = pr }
                                     .padding(vertical = 10.dp),
@@ -351,47 +465,83 @@ fun TasksScreen(
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(16.dp))
+                    // Display AI suggestions in a clean dismissible row
+                    AnimatedVisibility(visible = aiSuggestedPriorityState != null) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 12.dp)
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.08f))
+                                .padding(12.dp)
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Icon(
+                                        imageVector = Icons.Default.AutoAwesome,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.size(14.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = "AI Suggested: ${aiSuggestedPriorityState}",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    TextButton(
+                                        onClick = {
+                                            priority = aiSuggestedPriorityState ?: "MEDIUM"
+                                        },
+                                        modifier = Modifier.height(28.dp)
+                                    ) {
+                                        Text("Apply Suggestion", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                                    }
+                                    IconButton(
+                                        onClick = {
+                                            aiSuggestedPriorityState = null
+                                            aiSuggestionReason = null
+                                        },
+                                        modifier = Modifier.size(24.dp)
+                                    ) {
+                                        Icon(Icons.Default.Clear, contentDescription = "Discard AI Suggestion", modifier = Modifier.size(12.dp))
+                                    }
+                                }
+                            }
+                            if (aiSuggestionReason != null) {
+                                Text(
+                                    text = aiSuggestionReason ?: "",
+                                    fontSize = 10.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    lineHeight = 14.sp,
+                                    modifier = Modifier.padding(top = 4.dp)
+                                )
+                            }
+                        }
+                    }
 
-                    // Category Selector Selector Row
-                    Text(
-                        text = "Category",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.height(6.dp))
+                    Spacer(modifier = Modifier.height(14.dp))
+
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        listOf("Personal", "Study", "Work").forEach { cat ->
-                            val selected = category == cat
-                            Box(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .clip(RoundedCornerShape(8.dp))
-                                    .background(
-                                        if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
-                                        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
-                                    )
-                                    .border(
-                                        width = 1.dp,
-                                        color = if (selected) MaterialTheme.colorScheme.primary else Color.Transparent,
-                                        shape = RoundedCornerShape(8.dp)
-                                    )
-                                    .clickable { category = cat }
-                                    .padding(vertical = 10.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = cat,
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
+                        OutlinedTextField(
+                            value = category,
+                            onValueChange = { category = it },
+                            label = { Text("Category") },
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("task_category_input"),
+                            singleLine = true
+                        )
                     }
 
                     Spacer(modifier = Modifier.height(24.dp))
@@ -407,23 +557,23 @@ fun TasksScreen(
                         Button(
                             onClick = {
                                 if (title.isNotBlank()) {
-                                    val editTask = taskToEdit
-                                    if (editTask == null) {
+                                    val editT = taskToEdit
+                                    if (editT == null) {
                                         viewModel.addTask(
                                             title = title,
                                             description = description,
                                             priority = priority,
-                                            dueDate = System.currentTimeMillis(), // Due today default
-                                            dueTime = "12:00",
-                                            category = category
+                                            category = category.ifEmpty { "Personal" },
+                                            aiSuggestedPriority = aiSuggestedPriorityState
                                         )
                                     } else {
                                         viewModel.editTask(
-                                            editTask.copy(
+                                            editT.copy(
                                                 title = title,
                                                 description = description,
                                                 priority = priority,
-                                                category = category
+                                                category = category.ifEmpty { "Personal" },
+                                                aiSuggestedPriority = aiSuggestedPriorityState ?: editT.aiSuggestedPriority
                                             )
                                         )
                                     }
@@ -435,8 +585,221 @@ fun TasksScreen(
                             ),
                             modifier = Modifier.testTag("submit_button")
                         ) {
-                            Text(text = if (taskToEdit == null) "Create" else "Save", fontWeight = FontWeight.Bold, color = Color.Black)
+                            Text("Save", fontWeight = FontWeight.Bold, color = Color.Black)
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    // Render speech-to-text dialog overlay
+    if (showSpeechDialog) {
+        SpeechDictationDialog(
+            onDismiss = { showSpeechDialog = false },
+            onResult = { text ->
+                if (text.isNotBlank()) {
+                    if (speechTargetField == "title") {
+                        title = text
+                    } else if (speechTargetField == "description") {
+                        description = text
+                    }
+                }
+            }
+        )
+    }
+}
+
+@Composable
+fun SpeechDictationDialog(
+    onDismiss: () -> Unit,
+    onResult: (String) -> Unit
+) {
+    val context = LocalContext.current
+    var statusText by remember { mutableStateOf("Ready to record...") }
+    var recognizedText by remember { mutableStateOf("") }
+    var isListening by remember { mutableStateOf(false) }
+
+    val speechRecognizer = remember {
+        try {
+            SpeechRecognizer.createSpeechRecognizer(context)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    val intent = remember {
+        Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+            putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault())
+            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+        }
+    }
+
+    val listener = remember {
+        object : RecognitionListener {
+            override fun onReadyForSpeech(params: Bundle?) {
+                statusText = "Listening intently..."
+                isListening = true
+            }
+
+            override fun onBeginningOfSpeech() {
+                statusText = "Hearing voice..."
+            }
+
+            override fun onRmsChanged(rmsdB: Float) {}
+
+            override fun onBufferReceived(buffer: ByteArray?) {}
+
+            override fun onEndOfSpeech() {
+                statusText = "Processing audio..."
+                isListening = false
+            }
+
+            override fun onError(error: Int) {
+                isListening = false
+                statusText = when (error) {
+                    SpeechRecognizer.ERROR_AUDIO -> "Audio recording error."
+                    SpeechRecognizer.ERROR_CLIENT -> "Client error. Make sure Google Voice is active."
+                    SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Permission missing!"
+                    SpeechRecognizer.ERROR_NETWORK -> "Network issue."
+                    SpeechRecognizer.ERROR_NO_MATCH -> "No speech recognized. Try again."
+                    SpeechRecognizer.ERROR_RECOGNIZER_BUSY -> "Recognizer is busy."
+                    SpeechRecognizer.ERROR_SPEECH_TIMEOUT -> "Speech timeout."
+                    else -> "Speech error ($error)."
+                }
+            }
+
+            override fun onResults(results: Bundle?) {
+                val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                if (!matches.isNullOrEmpty()) {
+                    recognizedText = matches[0]
+                    statusText = "Successfully captured!"
+                }
+            }
+
+            override fun onPartialResults(partialResults: Bundle?) {
+                val matches = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                if (!matches.isNullOrEmpty()) {
+                    recognizedText = matches[0]
+                }
+            }
+
+            override fun onEvent(eventType: Int, params: Bundle?) {}
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        if (speechRecognizer != null) {
+            speechRecognizer.setRecognitionListener(listener)
+            try {
+                speechRecognizer.startListening(intent)
+                statusText = "Listening starting..."
+                isListening = true
+            } catch (e: Exception) {
+                statusText = "Failed to start listening: ${e.localizedMessage}"
+            }
+        } else {
+            statusText = "Speech recognizer not supported on this device."
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            try {
+                speechRecognizer?.stopListening()
+                speechRecognizer?.destroy()
+            } catch (e: Exception) {
+                // ignore
+            }
+        }
+    }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Card(
+            shape = RoundedCornerShape(24.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.2f))
+        ) {
+            Column(
+                modifier = Modifier
+                    .padding(24.dp)
+                    .fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text("Voice Dictation Assistant", fontWeight = FontWeight.Black, fontSize = 18.sp, color = MaterialTheme.colorScheme.primary)
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Box(
+                    modifier = Modifier
+                        .size(72.dp)
+                        .clip(CircleShape)
+                        .background(
+                            if (isListening) MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+                            else MaterialTheme.colorScheme.surfaceVariant
+                        )
+                        .border(
+                            width = 2.dp,
+                            color = if (isListening) MaterialTheme.colorScheme.primary else Color.Transparent,
+                            shape = CircleShape
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = if (isListening) Icons.Default.Mic else Icons.Default.MicOff,
+                        contentDescription = "Microphone Status",
+                        tint = if (isListening) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(32.dp)
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Text(statusText, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                
+                Spacer(modifier = Modifier.height(12.dp))
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(80.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f))
+                        .padding(12.dp)
+                ) {
+                    Text(
+                        text = recognizedText.ifEmpty { "Say something..." },
+                        fontSize = 14.sp,
+                        color = if (recognizedText.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
+                        fontStyle = if (recognizedText.isEmpty()) FontStyle.Italic else FontStyle.Normal
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    TextButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Cancel", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+
+                    Button(
+                        onClick = {
+                            onResult(recognizedText)
+                            onDismiss()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("Apply", color = Color.Black, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -464,79 +827,84 @@ fun TaskItemRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Icon(
-                imageVector = if (task.isCompleted) Icons.Filled.CheckCircle else Icons.Outlined.Circle,
-                contentDescription = "Complete Task",
-                tint = if (task.isCompleted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                modifier = Modifier
-                    .size(26.dp)
-                    .clip(CircleShape)
-                    .clickable(onClick = onToggleComplete)
-            )
-
-            Spacer(modifier = Modifier.width(14.dp))
-
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = task.title,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    textDecoration = if (task.isCompleted) TextDecoration.LineThrough else null,
-                    color = if (task.isCompleted) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onBackground
-                )
-                if (task.description.isNotBlank()) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = task.description,
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 2
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.weight(1f)
+            ) {
+                IconButton(onClick = onToggleComplete) {
+                    Icon(
+                        imageVector = if (task.isCompleted) Icons.Default.CheckCircle else Icons.Outlined.Circle,
+                        contentDescription = "Toggle Complete",
+                        tint = if (task.isCompleted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(24.dp)
                     )
                 }
 
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.width(8.dp))
 
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.1f))
-                            .padding(horizontal = 8.dp, vertical = 3.dp)
-                    ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = task.title,
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (task.isCompleted) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onBackground,
+                        textDecoration = if (task.isCompleted) TextDecoration.LineThrough else TextDecoration.None
+                    )
+                    if (task.description.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            text = task.category,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.primary
+                            text = task.description,
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2
                         )
                     }
 
-                    Spacer(modifier = Modifier.width(8.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
 
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(
-                                when (task.priority) {
-                                    "HIGH" -> Color(0xFFFF5252).copy(alpha = 0.1f)
-                                    "MEDIUM" -> Color(0xFFFFB74D).copy(alpha = 0.1f)
-                                    else -> MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.1f))
+                                .padding(horizontal = 8.dp, vertical = 3.dp)
+                        ) {
+                            Text(
+                                text = task.category,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.width(8.dp))
+
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(
+                                    when (task.priority) {
+                                        "HIGH" -> Color(0xFFFF5252).copy(alpha = 0.1f)
+                                        "MEDIUM" -> Color(0xFFFFB74D).copy(alpha = 0.1f)
+                                        else -> MaterialTheme.colorScheme.primary.copy(alpha = 0.1f)
+                                    }
+                                )
+                                .padding(horizontal = 8.dp, vertical = 3.dp)
+                        ) {
+                            Text(
+                                text = task.priority,
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = when (task.priority) {
+                                    "HIGH" -> Color(0xFFFF5252)
+                                    "MEDIUM" -> Color(0xFFFFB74D)
+                                    else -> MaterialTheme.colorScheme.primary
                                 }
                             )
-                            .padding(horizontal = 8.dp, vertical = 3.dp)
-                    ) {
-                        Text(
-                            text = task.priority,
-                            fontSize = 10.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = when (task.priority) {
-                                "HIGH" -> Color(0xFFFF5252)
-                                "MEDIUM" -> Color(0xFFFFB74D)
-                                else -> MaterialTheme.colorScheme.primary
-                            }
-                        )
+                        }
                     }
                 }
             }

@@ -1,5 +1,7 @@
 package com.example.ui.settings
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -40,11 +42,15 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -61,6 +67,24 @@ fun SettingsScreen(
     val isDarkTheme by viewModel.isDarkTheme.collectAsState()
     val isOnline by viewModel.isOnline.collectAsState()
     val scrollState = rememberScrollState()
+
+    val context = LocalContext.current
+    var backupJsonString by remember { mutableStateOf("") }
+
+    val createDocumentLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("application/json")
+    ) { uri ->
+        if (uri != null) {
+            try {
+                context.contentResolver.openOutputStream(uri)?.use { outputStream ->
+                    outputStream.write(backupJsonString.toByteArray())
+                    android.widget.Toast.makeText(context, "Data successfully backed up!", android.widget.Toast.LENGTH_SHORT).show()
+                }
+            } catch (e: Exception) {
+                android.widget.Toast.makeText(context, "Backup failed: ${e.localizedMessage}", android.widget.Toast.LENGTH_LONG).show()
+            }
+        }
+    }
 
     Column(
         modifier = modifier
@@ -162,6 +186,22 @@ fun SettingsScreen(
             subtitle = "Populate your OS with rich productivity samples",
             buttonText = "Load",
             onClick = { viewModel.loadSampleData() }
+        )
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+        // Export Backup JSON Row (Requested JSON Export feature!)
+        SettingsActionRow(
+            icon = Icons.Default.Download,
+            title = "Export Personal Data",
+            subtitle = "Save notes and tasks to an offline JSON backup file",
+            buttonText = "Export",
+            onClick = {
+                viewModel.exportAllDataAsJson { json ->
+                    backupJsonString = json
+                    createDocumentLauncher.launch("lifeos_backup.json")
+                }
+            }
         )
 
         Spacer(modifier = Modifier.height(12.dp))

@@ -10,6 +10,12 @@ import com.example.data.database.ExpenseDao
 import com.example.data.database.ExpenseEntity
 import com.example.data.database.ChatDao
 import com.example.data.database.ChatMessageEntity
+import com.example.data.database.GoalDao
+import com.example.data.database.GoalEntity
+import com.example.data.database.MilestoneDao
+import com.example.data.database.MilestoneEntity
+import com.example.data.database.JournalDao
+import com.example.data.database.JournalEntity
 import kotlinx.coroutines.flow.Flow
 
 class LifeRepository(
@@ -17,7 +23,10 @@ class LifeRepository(
     private val noteDao: NoteDao,
     private val studyDao: StudyDao,
     private val expenseDao: ExpenseDao,
-    private val chatDao: ChatDao
+    private val chatDao: ChatDao,
+    private val goalDao: GoalDao,
+    private val milestoneDao: MilestoneDao,
+    private val journalDao: JournalDao
 ) {
     // Tasks
     val allTasks: Flow<List<TaskEntity>> = taskDao.getAllTasks()
@@ -55,4 +64,25 @@ class LifeRepository(
     suspend fun insertMessage(message: ChatMessageEntity) = chatDao.insertMessage(message)
     suspend fun updateMessage(message: ChatMessageEntity) = chatDao.updateMessage(message)
     suspend fun clearChat() = chatDao.clearChat()
+
+    // Goals
+    val allGoals: Flow<List<GoalEntity>> = goalDao.getAllGoals()
+    suspend fun insertGoal(goal: GoalEntity) = goalDao.insertGoal(goal)
+    suspend fun updateGoal(goal: GoalEntity) = goalDao.updateGoal(goal)
+    suspend fun deleteGoal(goal: GoalEntity) = goalDao.deleteGoal(goal)
+    suspend fun deleteGoalById(id: Long) = goalDao.deleteGoalById(id)
+
+    // Milestones
+    fun getMilestonesForGoal(goalId: Long) = milestoneDao.getMilestonesForGoal(goalId)
+    suspend fun getMilestonesForGoalSync(goalId: Long) = milestoneDao.getMilestonesForGoalSync(goalId)
+    suspend fun insertMilestone(milestone: MilestoneEntity) = milestoneDao.insertMilestone(milestone)
+    suspend fun updateMilestone(milestone: MilestoneEntity) = milestoneDao.updateMilestone(milestone)
+    suspend fun deleteMilestone(milestone: MilestoneEntity) = milestoneDao.deleteMilestone(milestone)
+    suspend fun deleteMilestonesForGoal(goalId: Long) = milestoneDao.deleteMilestonesForGoal(goalId)
+    suspend fun deleteMilestoneById(id: Long) = milestoneDao.deleteMilestoneById(id)
+
+    // Journals
+    val allJournals: Flow<List<JournalEntity>> = journalDao.getAllJournals()
+    suspend fun insertJournal(journal: JournalEntity) = journalDao.insertJournal(journal)
+    suspend fun deleteJournal(journal: JournalEntity) = journalDao.deleteJournal(journal)
 }

@@ -21,7 +21,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Book
 import androidx.compose.material.icons.filled.CameraAlt
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Sort
 import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.NoteAdd
@@ -30,6 +32,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material.icons.filled.Wallet
+import androidx.compose.material.icons.filled.Flag
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -75,6 +78,16 @@ fun HomeScreen(
     val expenses by viewModel.expenses.collectAsState()
     val timerSecondsRemaining by viewModel.timerSecondsRemaining.collectAsState()
     val totalStudyTimeSeconds by viewModel.totalStudyTimeSeconds.collectAsState()
+    val lastExportTime by viewModel.lastExportTime.collectAsState()
+
+    val showExportWarning = remember(lastExportTime) {
+        lastExportTime == 0L || (System.currentTimeMillis() - lastExportTime > 30L * 24 * 60 * 60 * 1000L)
+    }
+
+    val aiTaskOrder by viewModel.aiTaskOrder.collectAsState()
+    val aiOrderRationale by viewModel.aiOrderRationale.collectAsState()
+    val isPrioritizing by viewModel.isPrioritizing.collectAsState()
+    var useAiOrder by remember { mutableStateOf(false) }
 
     // Date formatting
     val dateFormat = SimpleDateFormat("EEEE, MMMM d, yyyy", Locale.getDefault())
@@ -82,6 +95,19 @@ fun HomeScreen(
 
     // Metrics calculations
     val todayTasks = tasks // Already filtered by viewModel.tasks if filter is TODAY, but let's count completed vs pending
+    val displayTasks = remember(todayTasks, useAiOrder, aiTaskOrder) {
+        val pendingToday = todayTasks.filter { !it.isCompleted }
+        val completedToday = todayTasks.filter { it.isCompleted }
+        
+        if (useAiOrder && aiTaskOrder.isNotEmpty()) {
+            val pendingMapped = pendingToday.associateBy { it.id }
+            val orderedPending = aiTaskOrder.mapNotNull { id -> pendingMapped[id] }
+            val remainingPending = pendingToday.filter { !aiTaskOrder.contains(it.id) }
+            orderedPending + remainingPending + completedToday
+        } else {
+            todayTasks
+        }
+    }
     val totalTodayTasks = todayTasks.size
     val completedTodayTasks = todayTasks.count { it.isCompleted }
     val progressPercentage = if (totalTodayTasks > 0) {
@@ -118,6 +144,51 @@ fun HomeScreen(
                     color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.SemiBold
                 )
+            }
+        }
+
+        // 30-Day Export Data Security Warning Card
+        if (showExportWarning) {
+            item {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { viewModel.setScreen("settings") }
+                        .testTag("export_backup_warning_card"),
+                    colors = CardDefaults.cardColors(
+                        containerColor = Color(0xFFFFB74D).copy(alpha = 0.15f)
+                    ),
+                    shape = RoundedCornerShape(16.dp),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFFFFB74D))
+                ) {
+                    Row(
+                        modifier = Modifier.padding(14.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.NotificationsActive,
+                            contentDescription = "Warning",
+                            tint = Color(0xFFFFB74D),
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Data Security Notification",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Black,
+                                color = Color(0xFFFFB74D)
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "You have not exported a backup of your personal data in over 30 days. Click here to export to a secure JSON file.",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onBackground,
+                                lineHeight = 15.sp
+                            )
+                        }
+                    }
+                }
             }
         }
 
@@ -282,19 +353,287 @@ fun HomeScreen(
                         onClick = { onQuickAction("ASK_AI") }
                     )
                 }
+                Spacer(modifier = Modifier.height(16.dp))
+
+                SectionHeader(title = "Milestones & Insights")
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    // Goals
+                    Card(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(16.dp))
+                            .clickable { viewModel.setScreen("goals") }
+                            .testTag("quick_action_goals"),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
+                        )
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Flag,
+                                    contentDescription = "Goals",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "Goals",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+                        }
+                    }
+
+                    // Journal
+                    Card(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(16.dp))
+                            .clickable { viewModel.setScreen("journal") }
+                            .testTag("quick_action_journal"),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
+                        )
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.secondary.copy(alpha = 0.15f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Book,
+                                    contentDescription = "Journal",
+                                    tint = MaterialTheme.colorScheme.secondary,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "Journal",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+                        }
+                    }
+
+                    // Heatmap
+                    Card(
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(16.dp))
+                            .clickable { viewModel.setScreen("heatmap") }
+                            .testTag("quick_action_heatmap"),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
+                        )
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(14.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.Center
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .clip(CircleShape)
+                                    .background(Color(0xFF00F5D4).copy(alpha = 0.15f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.TrendingUp,
+                                    contentDescription = "Heatmap",
+                                    tint = Color(0xFF00F5D4),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(8.dp))
+                            Text(
+                                text = "Heatmap",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+                        }
+                    }
+                }
             }
         }
 
         // Today's Tasks Summary Section
         item {
-            SectionHeader(
-                title = "Today's Tasks",
-                actionText = "View All",
-                onActionClick = { viewModel.setScreen("tasks") }
-            )
+            Column {
+                SectionHeader(
+                    title = "Today's Tasks",
+                    actionText = "View All",
+                    onActionClick = { viewModel.setScreen("tasks") }
+                )
+                
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                // AI Ordering Toggle and Action Controls Row
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // Mode Toggles
+                    Row(
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
+                            .padding(4.dp),
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        val modes = listOf(false to "Standard", true to "⚡ AI Path")
+                        modes.forEach { (modeVal, label) ->
+                            val isSelected = useAiOrder == modeVal
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(
+                                        if (isSelected) MaterialTheme.colorScheme.primary 
+                                        else Color.Transparent
+                                    )
+                                    .clickable { 
+                                        useAiOrder = modeVal 
+                                        if (modeVal && aiTaskOrder.isEmpty()) {
+                                            viewModel.recalculateAiPrioritizedPath()
+                                        }
+                                    }
+                                    .padding(horizontal = 12.dp, vertical = 6.dp)
+                                    .testTag("task_order_mode_${label.lowercase().replace(" ", "_")}"),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = label,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = if (isSelected) Color.Black else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                    }
+
+                    // Recalculate Button
+                    Button(
+                        onClick = { viewModel.recalculateAiPrioritizedPath() },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.secondary.copy(alpha = 0.15f),
+                            contentColor = MaterialTheme.colorScheme.secondary
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        enabled = !isPrioritizing,
+                        modifier = Modifier.testTag("ai_prioritize_button")
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.AutoAwesome,
+                                contentDescription = null,
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Text(
+                                text = if (isPrioritizing) "Prioritizing..." else "Prioritize",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.ExtraBold
+                            )
+                        }
+                    }
+                }
+                
+                if (isPrioritizing) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    LinearProgressIndicator(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(4.dp)
+                            .clip(RoundedCornerShape(2.dp)),
+                        color = MaterialTheme.colorScheme.primary,
+                        trackColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
+                }
+
+                // AI Explanation Block (Rationale Card)
+                if (useAiOrder && !aiOrderRationale.isNullOrBlank() && !isPrioritizing) {
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Card(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("ai_rationale_card"),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.05f)
+                        ),
+                        shape = RoundedCornerShape(16.dp),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.15f))
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(14.dp),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.Top
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.AutoAwesome,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Column {
+                                Text(
+                                    text = "AI Recommended Sequence",
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(modifier = Modifier.height(2.dp))
+                                Text(
+                                    text = aiOrderRationale ?: "",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    lineHeight = 15.sp
+                                )
+                            }
+                        }
+                    }
+                }
+            }
         }
 
-        if (todayTasks.isEmpty()) {
+        if (displayTasks.isEmpty()) {
             item {
                 GlassCard {
                     Column(
@@ -311,7 +650,8 @@ fun HomeScreen(
                 }
             }
         } else {
-            items(todayTasks.take(3)) { task ->
+            items(displayTasks.take(5)) { task ->
+                val orderIndex = if (useAiOrder && !task.isCompleted) aiTaskOrder.indexOf(task.id) else -1
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -329,13 +669,31 @@ fun HomeScreen(
                     )
                     Spacer(modifier = Modifier.width(12.dp))
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = task.title,
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.Bold,
-                            textDecoration = if (task.isCompleted) TextDecoration.LineThrough else null,
-                            color = if (task.isCompleted) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onBackground
-                        )
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            if (orderIndex != -1) {
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(MaterialTheme.colorScheme.primary)
+                                        .padding(horizontal = 6.dp, vertical = 2.dp)
+                                ) {
+                                    Text(
+                                        text = "Step ${orderIndex + 1}",
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = Color.Black
+                                    )
+                                }
+                                Spacer(modifier = Modifier.width(6.dp))
+                            }
+                            Text(
+                                text = task.title,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold,
+                                textDecoration = if (task.isCompleted) TextDecoration.LineThrough else null,
+                                color = if (task.isCompleted) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onBackground
+                            )
+                        }
                         if (task.description.isNotBlank()) {
                             Text(
                                 text = task.description,
