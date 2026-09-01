@@ -1,0 +1,6 @@
+{
+  "name": "LifeOS",
+  "description": "AI Personal Operating System - Your highly-polished modern daily productivity assistant.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
