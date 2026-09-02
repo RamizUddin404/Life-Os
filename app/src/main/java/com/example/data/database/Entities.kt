@@ -13,11 +13,25 @@ data class TaskEntity(
     val dueTime: String? = null, // "HH:mm"
     val category: String, // "Work", "Personal", "Study", etc.
     val isCompleted: Boolean = false,
+    val isArchived: Boolean = false,
     val reminderTime: Long? = null,
     val isRecurring: Boolean = false,
     val recurrencePattern: String? = null, // "DAILY", "WEEKLY", etc.
     val aiSuggestedPriority: String? = null,
     val completedAt: Long? = null // timestamp in millis for productivity heatmap
+)
+
+@Entity(tableName = "users")
+data class UserEntity(
+    @PrimaryKey(autoGenerate = true) val id: Long = 0,
+    val email: String,
+    val name: String,
+    val passwordHash: String,
+    val pinCode: String? = null,
+    val avatarColor: Long = 0xFF6C5CE7,
+    val isBiometricEnabled: Boolean = false,
+    val createdAt: Long = System.currentTimeMillis(),
+    val lastLoginAt: Long = System.currentTimeMillis()
 )
 
 @Entity(tableName = "notes")

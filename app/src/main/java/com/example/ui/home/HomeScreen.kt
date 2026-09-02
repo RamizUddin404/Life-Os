@@ -30,6 +30,7 @@ import androidx.compose.material.icons.filled.NoteAdd
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.TrendingUp
 import androidx.compose.material.icons.filled.Wallet
 import androidx.compose.material.icons.filled.Flag
@@ -39,6 +40,10 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -88,6 +93,7 @@ fun HomeScreen(
     val aiOrderRationale by viewModel.aiOrderRationale.collectAsState()
     val isPrioritizing by viewModel.isPrioritizing.collectAsState()
     var useAiOrder by remember { mutableStateOf(false) }
+    var globalSearchQuery by remember { mutableStateOf("") }
 
     // Date formatting
     val dateFormat = SimpleDateFormat("EEEE, MMMM d, yyyy", Locale.getDefault())
@@ -144,6 +150,177 @@ fun HomeScreen(
                     color = MaterialTheme.colorScheme.primary,
                     fontWeight = FontWeight.SemiBold
                 )
+            }
+        }
+
+        // Global Search Bar
+        item {
+            OutlinedTextField(
+                value = globalSearchQuery,
+                onValueChange = { globalSearchQuery = it },
+                placeholder = { Text("Search tasks, notes, or transactions...") },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("global_search_input"),
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = "Global Search", tint = MaterialTheme.colorScheme.primary) },
+                trailingIcon = {
+                    if (globalSearchQuery.isNotBlank()) {
+                        IconButton(onClick = { globalSearchQuery = "" }) {
+                            Icon(Icons.Default.Clear, contentDescription = "Clear")
+                        }
+                    }
+                },
+                singleLine = true,
+                shape = RoundedCornerShape(16.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = MaterialTheme.colorScheme.primary,
+                    unfocusedBorderColor = MaterialTheme.colorScheme.surfaceVariant
+                )
+            )
+        }
+
+        // Global Search Results Card
+        if (globalSearchQuery.isNotBlank()) {
+            val filteredTasks = tasks.filter { it.title.contains(globalSearchQuery, ignoreCase = true) || it.description.contains(globalSearchQuery, ignoreCase = true) }
+            val filteredNotes = notes.filter { it.title.contains(globalSearchQuery, ignoreCase = true) || it.content.contains(globalSearchQuery, ignoreCase = true) }
+            val filteredExpenses = expenses.filter { it.description.contains(globalSearchQuery, ignoreCase = true) || it.category.contains(globalSearchQuery, ignoreCase = true) }
+            
+            val totalResults = filteredTasks.size + filteredNotes.size + filteredExpenses.size
+
+            item {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("global_search_results_card"),
+                    shape = RoundedCornerShape(20.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
+                    ),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.3f))
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = "Search Results ($totalResults)",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                            TextButton(onClick = { globalSearchQuery = "" }) {
+                                Text("Close", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                        
+                        if (totalResults == 0) {
+                            Text(
+                                text = "No matches found for \"$globalSearchQuery\"",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+                        } else {
+                            // Tasks list
+                            if (filteredTasks.isNotEmpty()) {
+                                Text(
+                                    text = "TASKS",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Black,
+                                    color = MaterialTheme.colorScheme.secondary,
+                                    modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
+                                )
+                                filteredTasks.take(3).forEach { task ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .clickable { viewModel.setScreen("tasks") }
+                                            .padding(8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(task.title, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
+                                            if (task.description.isNotBlank()) {
+                                                Text(task.description, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                                            }
+                                        }
+                                        Box(
+                                            modifier = Modifier
+                                                .clip(RoundedCornerShape(4.dp))
+                                                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f))
+                                                .padding(horizontal = 6.dp, vertical = 2.dp)
+                                        ) {
+                                            Text(task.priority, fontSize = 9.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            // Notes list
+                            if (filteredNotes.isNotEmpty()) {
+                                Text(
+                                    text = "NOTES",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Black,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
+                                )
+                                filteredNotes.take(3).forEach { note ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .clickable { viewModel.setScreen("notes") }
+                                            .padding(8.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Column {
+                                            Text(note.title, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
+                                            Text(note.content, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1)
+                                        }
+                                    }
+                                }
+                            }
+
+                            // Expenses/Transactions list
+                            if (filteredExpenses.isNotEmpty()) {
+                                Text(
+                                    text = "TRANSACTIONS",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Black,
+                                    color = Color(0xFFFF5252),
+                                    modifier = Modifier.padding(top = 8.dp, bottom = 4.dp)
+                                )
+                                filteredExpenses.take(3).forEach { expense ->
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .clickable { viewModel.setScreen("finance") }
+                                            .padding(8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Column {
+                                            Text(expense.description, fontSize = 13.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onBackground)
+                                            Text(expense.category, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        }
+                                        Text(
+                                            text = String.format(Locale.getDefault(), "$%.2f", expense.amount),
+                                            fontSize = 13.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = if (expense.type == "EXPENSE") Color(0xFFFF5252) else MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 

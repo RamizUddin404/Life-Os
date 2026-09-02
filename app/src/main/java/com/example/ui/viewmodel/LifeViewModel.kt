@@ -8,7 +8,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.LifeApplication
 import com.example.ai.CommandParser
-import com.example.ai.GeminiClient
+import com.example.ai.OpenRouterClient
 import com.example.ai.StructuredAction
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
@@ -20,6 +20,11 @@ import com.example.data.database.TaskEntity
 import com.example.data.database.GoalEntity
 import com.example.data.database.MilestoneEntity
 import com.example.data.database.JournalEntity
+import com.example.data.database.UserEntity
+import com.example.notification.TaskReminderManager
+import com.example.notification.CategoryReminderSuggestion
+import com.example.notification.AlarmReminderManager
+import com.example.notification.CustomAlarmItem
 import com.example.data.repository.LifeRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -39,20 +44,233 @@ import java.util.Date
 import java.util.Locale
 
 class LifeViewModel(
-    application: Application,
+    private val app: Application,
     private val repository: LifeRepository
-) : AndroidViewModel(application) {
+) : AndroidViewModel(app) {
 
     // --- Preferences & Last Export Check ---
     private val prefs by lazy {
-        application.getSharedPreferences("life_os_prefs", android.content.Context.MODE_PRIVATE)
+        app.getSharedPreferences("life_os_prefs", android.content.Context.MODE_PRIVATE)
     }
 
     private val _lastExportTime = MutableStateFlow(0L)
     val lastExportTime: StateFlow<Long> = _lastExportTime.asStateFlow()
 
+    // --- OpenRouter AI Configuration ---
+    private val _openRouterApiKey = MutableStateFlow(prefs.getString("openrouter_api_key", "") ?: "")
+    val openRouterApiKey: StateFlow<String> = _openRouterApiKey.asStateFlow()
+
+    private val _openRouterModel = MutableStateFlow(
+        prefs.getString("openrouter_model", OpenRouterClient.DEFAULT_MODEL) ?: OpenRouterClient.DEFAULT_MODEL
+    )
+    val openRouterModel: StateFlow<String> = _openRouterModel.asStateFlow()
+
+    // --- Authentication & User Identity ---
+    private val _currentUser = MutableStateFlow<UserEntity?>(null)
+    val currentUser: StateFlow<UserEntity?> = _currentUser.asStateFlow()
+
+    private val _isAuthenticated = MutableStateFlow(false)
+    val isAuthenticated: StateFlow<Boolean> = _isAuthenticated.asStateFlow()
+
+    val allUsers: StateFlow<List<UserEntity>> = repository.allUsers
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    // --- Alarms & Reminders Hub ---
+    private val _customAlarms = MutableStateFlow<List<CustomAlarmItem>>(emptyList())
+    val customAlarms: StateFlow<List<CustomAlarmItem>> = _customAlarms.asStateFlow()
+
     init {
         _lastExportTime.value = prefs.getLong("last_export_time", 0L)
+        AlarmReminderManager.initNotificationChannels(app)
+        loadCustomAlarms()
+        OpenRouterClient.setCustomApiKey(_openRouterApiKey.value)
+        OpenRouterClient.setActiveModel(_openRouterModel.value)
+        initCurrentUser()
+    }
+
+    fun loadCustomAlarms() {
+        _customAlarms.value = AlarmReminderManager.getSavedCustomAlarms(app)
+    }
+
+    fun addCustomAlarm(label: String, hour: Int, minute: Int, isSound: Boolean = true, isVibrate: Boolean = true) {
+        val newAlarm = CustomAlarmItem(
+            id = System.currentTimeMillis(),
+            label = label.ifBlank { "Custom Alarm" },
+            hour = hour,
+            minute = minute,
+            isEnabled = true,
+            isSound = isSound,
+            isVibrate = isVibrate
+        )
+        AlarmReminderManager.addCustomAlarm(app, newAlarm)
+        loadCustomAlarms()
+    }
+
+    fun toggleCustomAlarm(alarmId: Long, isEnabled: Boolean) {
+        AlarmReminderManager.toggleCustomAlarm(app, alarmId, isEnabled)
+        loadCustomAlarms()
+    }
+
+    fun deleteCustomAlarm(alarmId: Long) {
+        AlarmReminderManager.deleteCustomAlarm(app, alarmId)
+        loadCustomAlarms()
+    }
+
+    fun testAlarmSoundAndNotification(isSound: Boolean = true) {
+        AlarmReminderManager.testAlarmNow(app, isSound)
+    }
+
+    fun stopActiveAlarmSound() {
+        AlarmReminderManager.stopAlarmSound()
+    }
+
+    fun setOpenRouterApiKey(key: String) {
+        val trimmed = key.trim()
+        _openRouterApiKey.value = trimmed
+        prefs.edit().putString("openrouter_api_key", trimmed).apply()
+        OpenRouterClient.setCustomApiKey(trimmed)
+    }
+
+    fun setOpenRouterModel(model: String) {
+        val trimmed = model.trim()
+        _openRouterModel.value = trimmed
+        prefs.edit().putString("openrouter_model", trimmed).apply()
+        OpenRouterClient.setActiveModel(trimmed)
+    }
+
+    fun testOpenRouterConnection(onResult: (Boolean, String) -> Unit) {
+        viewModelScope.launch {
+            try {
+                val start = System.currentTimeMillis()
+                val testReply = OpenRouterClient.generate(
+                    prompt = "Respond with exactly: LifeOS Connected",
+                    systemInstruction = "You are OpenRouter connectivity tester. Be brief.",
+                    model = _openRouterModel.value,
+                    apiKeyOverride = _openRouterApiKey.value.takeIf { it.isNotBlank() }
+                )
+                val duration = System.currentTimeMillis() - start
+                onResult(true, "OpenRouter connected successfully! (${duration}ms)\nModel: ${_openRouterModel.value}")
+            } catch (e: Exception) {
+                onResult(false, "Connection error: ${e.localizedMessage ?: e.message}")
+            }
+        }
+    }
+
+    private fun initCurrentUser() {
+        viewModelScope.launch {
+            val savedEmail = prefs.getString("current_user_email", null)
+            if (savedEmail != null) {
+                val user = repository.getUserByEmail(savedEmail)
+                if (user != null) {
+                    _currentUser.value = user
+                    _isAuthenticated.value = true
+                    return@launch
+                }
+            }
+            // Auto seed default primary owner profile if database has no users
+            val existing = repository.getUserByEmail("ramizuddin2882@gmail.com")
+            if (existing == null) {
+                val defaultUserId = repository.insertUser(
+                    UserEntity(
+                        email = "ramizuddin2882@gmail.com",
+                        name = "Ramiz",
+                        passwordHash = "pass123",
+                        pinCode = "1234",
+                        avatarColor = 0xFF6C5CE7,
+                        isBiometricEnabled = true
+                    )
+                )
+                val defaultUser = repository.getUserById(defaultUserId)
+                _currentUser.value = defaultUser
+                _isAuthenticated.value = true
+                prefs.edit().putString("current_user_email", "ramizuddin2882@gmail.com").apply()
+            } else {
+                _currentUser.value = existing
+                _isAuthenticated.value = true
+            }
+        }
+    }
+
+    fun login(email: String, passwordHash: String, onResult: (Boolean, String) -> Unit) {
+        viewModelScope.launch {
+            val user = repository.getUserByEmail(email.trim().lowercase(Locale.getDefault()))
+            if (user == null) {
+                onResult(false, "No account found with this email.")
+            } else if (user.passwordHash != passwordHash) {
+                onResult(false, "Incorrect password. Please verify.")
+            } else {
+                _currentUser.value = user
+                _isAuthenticated.value = true
+                repository.updateLastLogin(user.id, System.currentTimeMillis())
+                prefs.edit().putString("current_user_email", user.email).apply()
+                onResult(true, "Welcome back, ${user.name}!")
+            }
+        }
+    }
+
+    fun register(name: String, email: String, passwordHash: String, pin: String?, onResult: (Boolean, String) -> Unit) {
+        viewModelScope.launch {
+            val cleanEmail = email.trim().lowercase(Locale.getDefault())
+            if (cleanEmail.isBlank() || name.isBlank() || passwordHash.isBlank()) {
+                onResult(false, "Please fill in all required fields.")
+                return@launch
+            }
+            val existing = repository.getUserByEmail(cleanEmail)
+            if (existing != null) {
+                onResult(false, "An account with this email already exists.")
+                return@launch
+            }
+            val palette = listOf(0xFF6C5CE7, 0xFF00CEC9, 0xFFFF7675, 0xFFFDCB6E, 0xFF0984E3, 0xFFE84393)
+            val randomColor = palette.random()
+            val newUserId = repository.insertUser(
+                UserEntity(
+                    email = cleanEmail,
+                    name = name.trim(),
+                    passwordHash = passwordHash,
+                    pinCode = pin,
+                    avatarColor = randomColor
+                )
+            )
+            val newUser = repository.getUserById(newUserId)
+            _currentUser.value = newUser
+            _isAuthenticated.value = true
+            prefs.edit().putString("current_user_email", cleanEmail).apply()
+            onResult(true, "Account created successfully. Welcome to LifeOS!")
+        }
+    }
+
+    fun unlockWithPin(pin: String): Boolean {
+        val user = _currentUser.value
+        return if (user?.pinCode != null && user.pinCode == pin) {
+            _isAuthenticated.value = true
+            true
+        } else if (user?.pinCode == null) {
+            _isAuthenticated.value = true
+            true
+        } else {
+            false
+        }
+    }
+
+    fun logout() {
+        prefs.edit().remove("current_user_email").apply()
+        _currentUser.value = null
+        _isAuthenticated.value = false
+    }
+
+    fun updateProfile(name: String, email: String, pin: String?, onResult: (Boolean, String) -> Unit) {
+        val user = _currentUser.value ?: return
+        viewModelScope.launch {
+            val updated = user.copy(
+                name = name.ifBlank { user.name },
+                email = email.ifBlank { user.email },
+                pinCode = pin ?: user.pinCode
+            )
+            repository.updateUser(updated)
+            _currentUser.value = updated
+            prefs.edit().putString("current_user_email", updated.email).apply()
+            onResult(true, "Profile updated successfully.")
+        }
     }
 
     fun recordExportTime() {
@@ -277,7 +495,7 @@ class LifeViewModel(
                     - **Facts**: Active recall session on key elements of $subject.
                     - **Questions**: Practice questions based on review of $subject.
                     
-                    (Connect online to get a rich, customized summary generated by Gemini!)
+                    (Connect online to get a rich, customized summary generated by OpenRouter AI!)
                 """.trimIndent()
                 onResult(mockSummary)
                 return@launch
@@ -296,7 +514,7 @@ class LifeViewModel(
                     
                     Structure beautifully using markdown, emoji, and bullet points. Keep it concise, professional, and clear.
                 """.trimIndent()
-                val result = GeminiClient.generate(
+                val result = OpenRouterClient.generate(
                     prompt = prompt,
                     systemInstruction = "You are an elite academic tutor. Generate clear, structured summaries of study sessions based on the subject and the user's quick notes."
                 )
@@ -309,9 +527,23 @@ class LifeViewModel(
 
     // --- Action Operations (P0) ---
     // Tasks
-    fun addTask(title: String, description: String, priority: String, dueDate: Long? = null, dueTime: String? = null, category: String, aiSuggestedPriority: String? = null) {
+    val archivedTasks: StateFlow<List<TaskEntity>> = repository.archivedTasks
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    fun addTask(
+        title: String,
+        description: String,
+        priority: String,
+        dueDate: Long? = null,
+        dueTime: String? = null,
+        category: String,
+        aiSuggestedPriority: String? = null,
+        reminderTime: Long? = null,
+        isArchived: Boolean = false,
+        isSoundAlarm: Boolean = false
+    ) {
         viewModelScope.launch {
-            repository.insertTask(
+            val taskId = repository.insertTask(
                 TaskEntity(
                     title = title,
                     description = description,
@@ -319,9 +551,144 @@ class LifeViewModel(
                     dueDate = dueDate ?: System.currentTimeMillis(),
                     dueTime = dueTime ?: "12:00",
                     category = category,
-                    aiSuggestedPriority = aiSuggestedPriority
+                    aiSuggestedPriority = aiSuggestedPriority,
+                    reminderTime = reminderTime,
+                    isArchived = isArchived
                 )
             )
+            // Schedule Alarm/Notification if reminderTime is set
+            if (reminderTime != null) {
+                if (reminderTime > System.currentTimeMillis()) {
+                    AlarmReminderManager.scheduleTaskReminder(
+                        context = app,
+                        taskId = taskId,
+                        title = title,
+                        message = "Due: ${dueTime ?: "Today"} • Category: $category",
+                        reminderTimeMillis = reminderTime,
+                        isSoundAlarm = isSoundAlarm,
+                        priority = priority
+                    )
+                } else {
+                    TaskReminderManager.sendTaskReminderNotification(
+                        context = app,
+                        taskId = taskId,
+                        title = title,
+                        message = "Due: ${dueTime ?: "Today"} • Category: $category",
+                        priority = priority
+                    )
+                }
+            }
+        }
+    }
+
+    // Batch Task Operations
+    fun batchDeleteTasks(ids: List<Long>, onComplete: (() -> Unit)? = null) {
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            ids.forEach { id -> AlarmReminderManager.cancelTaskReminder(app, id) }
+            repository.deleteTasksByIds(ids)
+            recalculateAiPrioritizedPath()
+            onComplete?.invoke()
+        }
+    }
+
+    fun batchArchiveTasks(ids: List<Long>, isArchived: Boolean = true, onComplete: (() -> Unit)? = null) {
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            repository.updateTasksArchived(ids, isArchived)
+            recalculateAiPrioritizedPath()
+            onComplete?.invoke()
+        }
+    }
+
+    fun batchSetPriority(ids: List<Long>, priority: String, onComplete: (() -> Unit)? = null) {
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            repository.updateTasksPriority(ids, priority)
+            recalculateAiPrioritizedPath()
+            onComplete?.invoke()
+        }
+    }
+
+    fun batchToggleComplete(ids: List<Long>, isCompleted: Boolean, onComplete: (() -> Unit)? = null) {
+        if (ids.isEmpty()) return
+        viewModelScope.launch {
+            val completedAt = if (isCompleted) System.currentTimeMillis() else null
+            repository.updateTasksCompletion(ids, isCompleted, completedAt)
+            recalculateAiPrioritizedPath()
+            onComplete?.invoke()
+        }
+    }
+
+    // Optimal Category Reminder Suggestions
+    fun getOptimalReminderForCategory(category: String): CategoryReminderSuggestion {
+        val allCurrentTasks = repository.allTasks.let { tasks.value }
+        return TaskReminderManager.getOptimalReminderForCategory(category, allCurrentTasks)
+    }
+
+    fun getAllCategoryReminderSuggestions(): List<CategoryReminderSuggestion> {
+        val allCurrentTasks = repository.allTasks.let { tasks.value }
+        return TaskReminderManager.getAllCategorySuggestions(allCurrentTasks)
+    }
+
+    fun triggerTaskReminderNotification(task: TaskEntity) {
+        TaskReminderManager.sendTaskReminderNotification(
+            context = app,
+            taskId = task.id,
+            title = task.title,
+            message = "${task.category} Task • Due: ${task.dueTime ?: "Today"}",
+            priority = task.priority
+        )
+    }
+
+    fun testCategoryReminderNotification(category: String) {
+        val suggestion = getOptimalReminderForCategory(category)
+        TaskReminderManager.sendTaskReminderNotification(
+            context = app,
+            taskId = System.currentTimeMillis() % 100000,
+            title = "LifeOS AI Focus: $category",
+            message = "Optimal peak productivity time is ${suggestion.suggestedTime}. ${suggestion.rationale}",
+            priority = "HIGH"
+        )
+    }
+
+    private val _isParsingTask = MutableStateFlow(false)
+    val isParsingTask: StateFlow<Boolean> = _isParsingTask.asStateFlow()
+
+    fun parseAndAddNaturalLanguageTask(input: String, onComplete: (Boolean, String) -> Unit) {
+        if (input.isBlank()) return
+        _isParsingTask.value = true
+        viewModelScope.launch {
+            try {
+                val action = if (_isOnline.value) {
+                    CommandParser.parseWithAI(input)
+                } else {
+                    CommandParser.parseOffline(input)
+                }
+                if (action != null && (action.action == "CREATE_TASK" || action.action == "CREATE_REMINDER")) {
+                    val parsedDueDate = action.dueDate?.let { parseDateStringToMillis(it) } ?: System.currentTimeMillis()
+                    val parsedTime = action.dueTime ?: "12:00"
+                    val parsedCategory = action.category ?: "Personal"
+                    val parsedPriority = action.priority ?: "MEDIUM"
+
+                    addTask(
+                        title = action.title ?: "New AI Task",
+                        description = action.description ?: "Created via Voice / Quick Assistant",
+                        priority = parsedPriority,
+                        dueDate = parsedDueDate,
+                        dueTime = parsedTime,
+                        category = parsedCategory,
+                        reminderTime = parsedDueDate
+                    )
+                    onComplete(true, "Scheduled: \"${action.title}\" on ${action.dueDate ?: "Today"} at $parsedTime ($parsedPriority)")
+                } else {
+                    onComplete(false, "Could not parse command. Try: 'Remind me to finish the report tomorrow at 5pm'")
+                }
+            } catch (e: Exception) {
+                onComplete(false, "Error: ${e.localizedMessage}")
+            } finally {
+                _isParsingTask.value = false
+            }
         }
     }
 
@@ -329,6 +696,20 @@ class LifeViewModel(
         viewModelScope.launch {
             val nextCompleted = !task.isCompleted
             val completedTime = if (nextCompleted) System.currentTimeMillis() else null
+            if (nextCompleted) {
+                // Cancel active alarm since task is done
+                AlarmReminderManager.cancelTaskReminder(app, task.id)
+            } else if (task.reminderTime != null && task.reminderTime > System.currentTimeMillis()) {
+                // Reschedule alarm if unchecked
+                AlarmReminderManager.scheduleTaskReminder(
+                    context = app,
+                    taskId = task.id,
+                    title = task.title,
+                    message = "Due: ${task.dueTime ?: "Today"} • Category: ${task.category}",
+                    reminderTimeMillis = task.reminderTime,
+                    priority = task.priority
+                )
+            }
             repository.updateTask(task.copy(
                 isCompleted = nextCompleted,
                 completedAt = completedTime
@@ -363,7 +744,7 @@ class LifeViewModel(
                       "reason": "your short explanation why this priority level fits the task"
                     }
                 """.trimIndent()
-                val response = GeminiClient.generate(
+                val response = OpenRouterClient.generate(
                     prompt = prompt,
                     systemInstruction = "You are an intelligent task prioritization agent. Only output valid JSON matching the schema.",
                     isJson = true
@@ -419,7 +800,7 @@ class LifeViewModel(
                       "rationale": "your clear and helpful explanation of why this sequence is optimal"
                     }
                 """.trimIndent()
-                val response = GeminiClient.generate(
+                val response = OpenRouterClient.generate(
                     prompt = prompt,
                     systemInstruction = "You are a precise task optimization assistant. Always output valid JSON.",
                     isJson = true
@@ -450,12 +831,25 @@ class LifeViewModel(
 
     fun deleteTask(task: TaskEntity) {
         viewModelScope.launch {
+            AlarmReminderManager.cancelTaskReminder(app, task.id)
             repository.deleteTask(task)
         }
     }
 
-    fun editTask(task: TaskEntity) {
+    fun editTask(task: TaskEntity, isSoundAlarm: Boolean = false) {
         viewModelScope.launch {
+            AlarmReminderManager.cancelTaskReminder(app, task.id)
+            if (task.reminderTime != null && task.reminderTime > System.currentTimeMillis() && !task.isCompleted) {
+                AlarmReminderManager.scheduleTaskReminder(
+                    context = app,
+                    taskId = task.id,
+                    title = task.title,
+                    message = "Due: ${task.dueTime ?: "Today"} • Category: ${task.category}",
+                    reminderTimeMillis = task.reminderTime,
+                    isSoundAlarm = isSoundAlarm,
+                    priority = task.priority
+                )
+            }
             repository.updateTask(task)
         }
     }
@@ -621,9 +1015,9 @@ class LifeViewModel(
 
                 var reply = ""
                 if (_isOnline.value) {
-                    reply = GeminiClient.generate(
+                    reply = OpenRouterClient.generate(
                         prompt = appStateContextPrompt,
-                        systemInstruction = "You are LifeOS AI Assistant. Keep answers friendly, short, polished, and structured in Markdown. If the user request triggers an action, briefly mention that you can help them create it, and ask them to confirm in the UI below."
+                        systemInstruction = "You are LifeOS AI Assistant powered by OpenRouter. Keep answers friendly, short, polished, and structured in Markdown. If the user request triggers an action, briefly mention that you can help them create it, and ask them to confirm in the UI below."
                     )
                 } else {
                     reply = when {
@@ -753,12 +1147,12 @@ class LifeViewModel(
     fun askAiToSummarizeNote(note: NoteEntity, onResult: (String) -> Unit) {
         viewModelScope.launch {
             if (!_isOnline.value) {
-                onResult("Offline Summarization Fallback:\n\nThis note titled '${note.title}' contains info about ${note.category}. (Connect online for deep Gemini summaries)")
+                onResult("Offline Summarization Fallback:\n\nThis note titled '${note.title}' contains info about ${note.category}. (Connect online for deep OpenRouter AI summaries)")
                 return@launch
             }
             try {
                 val prompt = "Summarize this note in 3 clean bullet points:\n\nTitle: ${note.title}\nContent: ${note.content}"
-                val result = GeminiClient.generate(prompt = prompt, systemInstruction = "You are a professional summarizer. Keep points clean, brief, and highly readable.")
+                val result = OpenRouterClient.generate(prompt = prompt, systemInstruction = "You are a professional summarizer. Keep points clean, brief, and highly readable.")
                 onResult(result)
             } catch (e: Exception) {
                 onResult("Error summarizing note: ${e.message}")
@@ -769,12 +1163,12 @@ class LifeViewModel(
     fun askAiToGenerateQuiz(note: NoteEntity, onResult: (String) -> Unit) {
         viewModelScope.launch {
             if (!_isOnline.value) {
-                onResult("Offline Quiz Helper:\n\n1. What is the main theme of ${note.title}?\n2. Name two key points in this note.\n\n(Connect online for interactive Gemini quizzes!)")
+                onResult("Offline Quiz Helper:\n\n1. What is the main theme of ${note.title}?\n2. Name two key points in this note.\n\n(Connect online for interactive OpenRouter AI quizzes!)")
                 return@launch
             }
             try {
                 val prompt = "Generate a short 3-question multiple-choice quiz based on this content:\n\nTitle: ${note.title}\nContent: ${note.content}"
-                val result = GeminiClient.generate(prompt = prompt, systemInstruction = "You are an educational quiz generator. Provide 3 multiple-choice questions with correct answers clearly specified at the end.")
+                val result = OpenRouterClient.generate(prompt = prompt, systemInstruction = "You are an educational quiz generator. Provide 3 multiple-choice questions with correct answers clearly specified at the end.")
                 onResult(result)
             } catch (e: Exception) {
                 onResult("Error generating quiz: ${e.message}")
@@ -806,7 +1200,7 @@ class LifeViewModel(
             _scannedOcrText.value = mockText
 
             if (!_isOnline.value) {
-                onResult("Offline Text Extraction Complete:\n\n$mockText\n\n(Connect online to summarize or convert this receipt to structured notes/checklists via Gemini!)")
+                onResult("Offline Text Extraction Complete:\n\n$mockText\n\n(Connect online to summarize or convert this receipt to structured notes/checklists via OpenRouter AI!)")
                 _isChatLoading.value = false
                 return@launch
             }
@@ -819,13 +1213,13 @@ class LifeViewModel(
                     else -> "Extract and explain the core information in this text:\n\n$mockText"
                 }
 
-                val reply = GeminiClient.generate(
+                val reply = OpenRouterClient.generate(
                     prompt = prompt,
-                    systemInstruction = "You are LifeOS Document AI. Process the extracted document text appropriately."
+                    systemInstruction = "You are LifeOS Document AI powered by OpenRouter. Process the extracted document text appropriately."
                 )
                 onResult(reply)
             } catch (e: Exception) {
-                onResult("Document processed locally:\n\n$mockText\n\n(Gemini analysis failed: ${e.message})")
+                onResult("Document processed locally:\n\n$mockText\n\n(OpenRouter analysis failed: ${e.message})")
             } finally {
                 _isChatLoading.value = false
             }
@@ -939,7 +1333,7 @@ class LifeViewModel(
                     ]
                 """.trimIndent()
                 
-                val response = GeminiClient.generate(
+                val response = OpenRouterClient.generate(
                     prompt = prompt,
                     systemInstruction = "You are a realistic timeline generator. Always output valid JSON array.",
                     isJson = true
@@ -1057,7 +1451,7 @@ class LifeViewModel(
                     Generate a single creative reflection prompt (max 2 sentences) that helps the user reflect on their productivity vs financial choices today.
                 """.trimIndent()
                 
-                val response = GeminiClient.generate(
+                val response = OpenRouterClient.generate(
                     prompt = prompt,
                     systemInstruction = "You are a reflective journal assistant. Keep prompts inspiring, personal, and concise."
                 )

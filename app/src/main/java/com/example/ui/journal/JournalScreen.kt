@@ -24,6 +24,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.database.JournalEntity
 import com.example.ui.components.GlassCard
+import com.example.ui.components.EmptyStateView
 import com.example.ui.viewmodel.LifeViewModel
 import java.text.SimpleDateFormat
 import java.util.*
@@ -217,36 +218,12 @@ fun JournalScreen(
 
                 if (journals.isEmpty()) {
                     item {
-                        Card(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 12.dp),
-                            shape = RoundedCornerShape(16.dp),
-                            colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f)
-                            )
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(24.dp),
-                                horizontalAlignment = Alignment.CenterHorizontally
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Default.Book,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                                    modifier = Modifier.size(36.dp)
-                                )
-                                Spacer(modifier = Modifier.height(8.dp))
-                                Text(
-                                    text = "No history logged",
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
+                        EmptyStateView(
+                            icon = Icons.Default.Book,
+                            title = "No Reflection History",
+                            tip = "Log your thoughts, achievements, and insights daily using the AI prompt generator above.",
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp)
+                        )
                     }
                 } else {
                     items(journals) { journal ->

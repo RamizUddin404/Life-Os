@@ -25,6 +25,7 @@ import com.example.data.database.GoalEntity
 import com.example.data.database.MilestoneEntity
 import com.example.ui.components.GlassCard
 import com.example.ui.components.SectionHeader
+import com.example.ui.components.EmptyStateView
 import com.example.ui.viewmodel.LifeViewModel
 import org.json.JSONArray
 import java.text.SimpleDateFormat
@@ -150,33 +151,12 @@ fun GoalsScreen(
                         .weight(1f),
                     contentAlignment = Alignment.Center
                 ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.Center,
+                    EmptyStateView(
+                        icon = Icons.Default.Flag,
+                        title = "No Goals Declared Yet",
+                        tip = "Define an objective and use Gemini AI to map out realistic milestones based on your productivity history.",
                         modifier = Modifier.padding(32.dp)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.Flag,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.4f),
-                            modifier = Modifier.size(64.dp)
-                        )
-                        Spacer(modifier = Modifier.height(16.dp))
-                        Text(
-                            text = "No goals declared yet",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 16.sp,
-                            color = MaterialTheme.colorScheme.onBackground
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = "Define an objective and use Gemini AI to map out realistic milestones based on your productivity history.",
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                            lineHeight = 16.sp
-                        )
-                    }
+                    )
                 }
             } else {
                 LazyColumn(

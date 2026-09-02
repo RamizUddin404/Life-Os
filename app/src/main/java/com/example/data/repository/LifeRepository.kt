@@ -16,6 +16,8 @@ import com.example.data.database.MilestoneDao
 import com.example.data.database.MilestoneEntity
 import com.example.data.database.JournalDao
 import com.example.data.database.JournalEntity
+import com.example.data.database.UserDao
+import com.example.data.database.UserEntity
 import kotlinx.coroutines.flow.Flow
 
 class LifeRepository(
@@ -26,15 +28,21 @@ class LifeRepository(
     private val chatDao: ChatDao,
     private val goalDao: GoalDao,
     private val milestoneDao: MilestoneDao,
-    private val journalDao: JournalDao
+    private val journalDao: JournalDao,
+    private val userDao: UserDao
 ) {
     // Tasks
     val allTasks: Flow<List<TaskEntity>> = taskDao.getAllTasks()
+    val archivedTasks: Flow<List<TaskEntity>> = taskDao.getArchivedTasks()
     suspend fun getTaskById(id: Long) = taskDao.getTaskById(id)
     suspend fun insertTask(task: TaskEntity) = taskDao.insertTask(task)
     suspend fun updateTask(task: TaskEntity) = taskDao.updateTask(task)
     suspend fun deleteTask(task: TaskEntity) = taskDao.deleteTask(task)
     suspend fun deleteTaskById(id: Long) = taskDao.deleteTaskById(id)
+    suspend fun deleteTasksByIds(ids: List<Long>) = taskDao.deleteTasksByIds(ids)
+    suspend fun updateTasksArchived(ids: List<Long>, isArchived: Boolean) = taskDao.updateTasksArchived(ids, isArchived)
+    suspend fun updateTasksPriority(ids: List<Long>, priority: String) = taskDao.updateTasksPriority(ids, priority)
+    suspend fun updateTasksCompletion(ids: List<Long>, isCompleted: Boolean, completedAt: Long?) = taskDao.updateTasksCompletion(ids, isCompleted, completedAt)
 
     // Notes
     val allNotes: Flow<List<NoteEntity>> = noteDao.getAllNotes()
@@ -85,4 +93,13 @@ class LifeRepository(
     val allJournals: Flow<List<JournalEntity>> = journalDao.getAllJournals()
     suspend fun insertJournal(journal: JournalEntity) = journalDao.insertJournal(journal)
     suspend fun deleteJournal(journal: JournalEntity) = journalDao.deleteJournal(journal)
+
+    // Users & Auth
+    val allUsers: Flow<List<UserEntity>> = userDao.getAllUsers()
+    suspend fun getUserByEmail(email: String) = userDao.getUserByEmail(email)
+    suspend fun getUserById(id: Long) = userDao.getUserById(id)
+    suspend fun insertUser(user: UserEntity) = userDao.insertUser(user)
+    suspend fun updateUser(user: UserEntity) = userDao.updateUser(user)
+    suspend fun deleteUser(user: UserEntity) = userDao.deleteUser(user)
+    suspend fun updateLastLogin(id: Long, timestamp: Long) = userDao.updateLastLogin(id, timestamp)
 }

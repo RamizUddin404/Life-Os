@@ -10,8 +10,11 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface TaskDao {
-    @Query("SELECT * FROM tasks ORDER BY dueDate ASC, isCompleted ASC")
+    @Query("SELECT * FROM tasks WHERE isArchived = 0 ORDER BY dueDate ASC, isCompleted ASC")
     fun getAllTasks(): Flow<List<TaskEntity>>
+
+    @Query("SELECT * FROM tasks WHERE isArchived = 1 ORDER BY dueDate DESC")
+    fun getArchivedTasks(): Flow<List<TaskEntity>>
 
     @Query("SELECT * FROM tasks WHERE id = :id")
     suspend fun getTaskById(id: Long): TaskEntity?
@@ -27,6 +30,18 @@ interface TaskDao {
 
     @Query("DELETE FROM tasks WHERE id = :id")
     suspend fun deleteTaskById(id: Long)
+
+    @Query("DELETE FROM tasks WHERE id IN (:ids)")
+    suspend fun deleteTasksByIds(ids: List<Long>)
+
+    @Query("UPDATE tasks SET isArchived = :isArchived WHERE id IN (:ids)")
+    suspend fun updateTasksArchived(ids: List<Long>, isArchived: Boolean)
+
+    @Query("UPDATE tasks SET priority = :priority WHERE id IN (:ids)")
+    suspend fun updateTasksPriority(ids: List<Long>, priority: String)
+
+    @Query("UPDATE tasks SET isCompleted = :isCompleted, completedAt = :completedAt WHERE id IN (:ids)")
+    suspend fun updateTasksCompletion(ids: List<Long>, isCompleted: Boolean, completedAt: Long?)
 }
 
 @Dao
@@ -156,4 +171,28 @@ interface JournalDao {
 
     @Delete
     suspend fun deleteJournal(journal: JournalEntity)
+}
+
+@Dao
+interface UserDao {
+    @Query("SELECT * FROM users ORDER BY lastLoginAt DESC")
+    fun getAllUsers(): Flow<List<UserEntity>>
+
+    @Query("SELECT * FROM users WHERE email = :email LIMIT 1")
+    suspend fun getUserByEmail(email: String): UserEntity?
+
+    @Query("SELECT * FROM users WHERE id = :id LIMIT 1")
+    suspend fun getUserById(id: Long): UserEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertUser(user: UserEntity): Long
+
+    @Update
+    suspend fun updateUser(user: UserEntity)
+
+    @Delete
+    suspend fun deleteUser(user: UserEntity)
+
+    @Query("UPDATE users SET lastLoginAt = :timestamp WHERE id = :id")
+    suspend fun updateLastLogin(id: Long, timestamp: Long)
 }

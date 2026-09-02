@@ -76,6 +76,7 @@ fun AssistantScreen(
     val messages by viewModel.chatMessages.collectAsState()
     val isLoading by viewModel.isChatLoading.collectAsState()
     val pendingAction by viewModel.pendingAction.collectAsState()
+    val activeModel by viewModel.openRouterModel.collectAsState()
 
     var textInput by remember { mutableStateOf("") }
     val listState = rememberLazyListState()
@@ -124,7 +125,7 @@ fun AssistantScreen(
                 Spacer(modifier = Modifier.width(12.dp))
                 Column {
                     Text("LifeOS AI Core", fontSize = 16.sp, fontWeight = FontWeight.Black, color = MaterialTheme.colorScheme.onBackground)
-                    Text("Connected to gemini-3.5-flash", fontSize = 11.sp, color = MaterialTheme.colorScheme.primary)
+                    Text("OpenRouter: $activeModel", fontSize = 10.sp, color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.SemiBold)
                 }
             }
 

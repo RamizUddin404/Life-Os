@@ -21,6 +21,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.foundation.Image
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -178,6 +181,7 @@ fun EmptyStateView(
     title: String,
     tip: String,
     modifier: Modifier = Modifier,
+    imageResId: Int? = null,
     actionText: String? = null,
     onActionClick: (() -> Unit)? = null
 ) {
@@ -188,38 +192,68 @@ fun EmptyStateView(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f),
-            modifier = Modifier.size(64.dp)
-        )
-        Spacer(modifier = Modifier.height(16.dp))
+        if (imageResId != null) {
+            Box(
+                modifier = Modifier
+                    .size(180.dp)
+                    .clip(RoundedCornerShape(24.dp))
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.2f))
+                    .border(
+                        width = 1.dp,
+                        brush = Brush.linearGradient(
+                            colors = listOf(
+                                MaterialTheme.colorScheme.primary.copy(alpha = 0.3f),
+                                MaterialTheme.colorScheme.secondary.copy(alpha = 0.1f)
+                            )
+                        ),
+                        shape = RoundedCornerShape(24.dp)
+                    ),
+                contentAlignment = Alignment.Center
+            ) {
+                Image(
+                    painter = painterResource(id = imageResId),
+                    contentDescription = title,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier
+                        .size(164.dp)
+                        .clip(RoundedCornerShape(18.dp))
+                )
+            }
+        } else {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.3f),
+                modifier = Modifier.size(64.dp)
+            )
+        }
+        Spacer(modifier = Modifier.height(20.dp))
         Text(
             text = title,
-            fontSize = 18.sp,
-            fontWeight = FontWeight.Bold,
+            fontSize = 19.sp,
+            fontWeight = FontWeight.Black,
             color = MaterialTheme.colorScheme.onBackground,
             textAlign = TextAlign.Center
         )
         Spacer(modifier = Modifier.height(8.dp))
         Text(
             text = tip,
-            fontSize = 14.sp,
+            fontSize = 13.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center,
             lineHeight = 18.sp,
             modifier = Modifier.padding(horizontal = 16.dp)
         )
         if (actionText != null && onActionClick != null) {
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(20.dp))
             Button(
                 onClick = onActionClick,
                 colors = ButtonDefaults.buttonColors(
                     containerColor = MaterialTheme.colorScheme.primary
-                )
+                ),
+                shape = RoundedCornerShape(12.dp)
             ) {
-                Text(text = actionText, fontWeight = FontWeight.Bold)
+                Text(text = actionText, fontWeight = FontWeight.Bold, color = Color.Black)
             }
         }
     }

@@ -48,7 +48,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.rememberCoroutineScope
 import kotlinx.coroutines.launch
-import com.example.ai.GeminiClient
+import com.example.ai.OpenRouterClient
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -399,12 +399,12 @@ fun StudyScreen(
                                         coroutineScope.launch {
                                             try {
                                                 val res = if (isOnline) {
-                                                    GeminiClient.generate(
+                                                    OpenRouterClient.generate(
                                                         prompt = prompt,
                                                         systemInstruction = "You are an elite academic study scheduler. Output concise, actionable timetables and clear diagnostic questions."
                                                     )
                                                 } else {
-                                                    "Offline Planner Fallback:\n\n**Timetable Proposal**:\n- Day 1: General Core Overview\n- Day 2: Focused Subject Drill\n- Day 3: Active recall exam simulation quiz\n\n(Connect online to access Gemini custom topic outlines and adaptive practice quizzes!)"
+                                                    "Offline Planner Fallback:\n\n**Timetable Proposal**:\n- Day 1: General Core Overview\n- Day 2: Focused Subject Drill\n- Day 3: Active recall exam simulation quiz\n\n(Connect online to access OpenRouter AI custom topic outlines and adaptive practice quizzes!)"
                                                 }
                                                 aiGeneratedSchedule = res
                                             } catch (e: Exception) {

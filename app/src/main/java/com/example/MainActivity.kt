@@ -51,6 +51,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.ViewModelProvider
+import com.example.ui.auth.AuthScreen
 import com.example.ui.assistant.AssistantScreen
 import com.example.ui.finance.FinanceScreen
 import com.example.ui.home.HomeScreen
@@ -80,6 +81,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             val isDarkTheme by viewModel.isDarkTheme.collectAsState()
             val isOnboardingComplete by viewModel.isOnboardingComplete.collectAsState()
+            val isAuthenticated by viewModel.isAuthenticated.collectAsState()
             val currentScreen by viewModel.currentScreen.collectAsState()
 
             MyApplicationTheme(darkTheme = isDarkTheme) {
@@ -92,6 +94,12 @@ class MainActivity : ComponentActivity() {
                         OnboardingScreen(
                             viewModel = viewModel,
                             modifier = Modifier.fillMaxSize()
+                        )
+                    } else if (!isAuthenticated) {
+                        AuthScreen(
+                            viewModel = viewModel,
+                            modifier = Modifier.fillMaxSize(),
+                            onAuthSuccess = { /* State updates automatically */ }
                         )
                     } else {
                         MainAppContainer(

@@ -14,9 +14,10 @@ import androidx.room.RoomDatabase
         ChatMessageEntity::class,
         GoalEntity::class,
         MilestoneEntity::class,
-        JournalEntity::class
+        JournalEntity::class,
+        UserEntity::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -28,6 +29,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun goalDao(): GoalDao
     abstract fun milestoneDao(): MilestoneDao
     abstract fun journalDao(): JournalDao
+    abstract fun userDao(): UserDao
 
     companion object {
         @Volatile
